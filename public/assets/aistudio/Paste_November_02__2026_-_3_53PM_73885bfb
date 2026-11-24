@@ -1,0 +1,2126 @@
+Here is Part 3, the final part of Phase 5!
+
+This includes the main App.tsx layout (which makes the map full-screen and
+floats the UI on top) and the CourtDossier.tsx (which implements the Visual
+Dynasty Tree and the frosted-glass sliding panel).
+
+Once you copy these last two files, your application will be fully upgraded!
+
+1. src/App.tsx
+
+--- START OF FILE src/App.tsx ---
+import React, { useState, useMemo, useCallback, useEffect } from 'react';
+import {
+  WorldState,
+  WorldSettings,
+  Realm,
+  Burg,
+  County,
+  Character,
+  SagaStory,
+  Season,
+  WeatherEvent,
+} from './types/world';
+import { generateWorld } from './engine/worldGenerator';
+import { advanceTimeline } from './engine/timelineSimulation';
+import {
+  generateSeasonalWeather,
+  getNextSeason,
+  getRandomNextSeason,
+  generateSpontaneousAnomaly,
+  computeSeasonalState,
+} from './engine/weatherSimulation';
+import { TopBar } from './components/TopBar';
+import { MapCanvas, MapLayer } from './components/MapCanvas';
+import { CourtDossier } from './components/CourtDossier';
+import { TimelineBar } from './components/TimelineBar';
+import { CompendiumModal } from './components/CompendiumModal';
+import { ChroniclesView } from './components/ChroniclesView';
+import { SagaWeaver } from './components/SagaWeaver';
+import { AnimatePresence, motion } from 'motion/react';
+
+export default function App() {
+  const [settings, setSettings] = useState<WorldSettings>({
+    seed: 'Avalon-1042',
+    template: 'Continents',
+    realmCount: 5,
+    cultureCount: 4,
+    seaLevel: 0.28,
+    mapgen4: {
+      windAngleDeg: 30,
+      raininess: 1.2,
+      seaLevel: 0.28,
+      minRiverFlow: 1.8,
+      brushMode: 'inspect',
+      brushSize: 55,
+      brushStrength: 0.12,
+    },
+  });
+
+  const [world, setWorld] = useState<WorldState>(() => generateWorld(settings));
+  const [isGenerating, setIsGenerating] = useState(false);
+
+  const [seasonPhase, setSeasonPhase] = useState<number>(0.2);
+  const [isPlaying, setIsPlaying] = useState<boolean>(false);
+  const [activeWeather, setActiveWeather] = useState<WeatherEvent>(() =>
+    generateSeasonalWeather('Spring')
+  );
+
+  const seasonalState = useMemo(
+    () => computeSeasonalState(seasonPhase, activeWeather),
+    [seasonPhase, activeWeather]
+  );
+
+  const [currentView, setCurrentView] = useState<'map' | 'sagas' | 'chronicles' | 'compendium'>('map');
+  const [isCompendiumOpen, setIsCompendiumOpen] = useState(false);
+  const [compendiumInitialEntityId, setCompendiumInitialEntityId] = useState<string | undefined>();
+
+  const [activeLayers, setActiveLayers] = useState<Record<MapLayer, boolean>>({
+    political: true,
+    feudal: false,
+    heightmap: false,
+    biomes: true,
+    rainfall: false,
+    wind: false,
+    cultures: false,
+    religions: false,
+    burgs: true,
+    rivers: true,
+    relief: true,
+    contours: true,
+    textures: true,
+    routes: true,
+    caravans: true,
+    density: false,
+    weather: true,
+    provinces: true,
+    epidemics: true,
+  });
+
+  const [selectedRealmId, setSelectedRealmId] = useState<string | undefined>(() => world.realms[0]?.id);
+  const [selectedBurgId, setSelectedBurgId] = useState<string | undefined>(undefined);
+  const [selectedCountyId, setSelectedCountyId] = useState<string | undefined>(() => world.counties[0]?.id);
+
+  const selectedRealm = useMemo(
+    () => world.realms.find((r) => r.id === selectedRealmId) || world.realms[0],
+    [world.realms, selectedRealmId]
+  );
+  const selectedBurg = useMemo(
+    () => world.burgs.find((b) => b.id === selectedBurgId) || world.burgs[0],
+    [world.burgs, selectedBurgId]
+  );
+  const selectedCounty = useMemo(
+    () => world.counties.find((c) => c.id === selectedCountyId) || world.counties[0],
+    [world.counties, selectedCountyId]
+  );
+
+  const handleToggleLayer = useCallback((layer: MapLayer) => {
+    setActiveLayers((prev) => ({
+      ...prev,
+      [layer]: !prev[layer],
+    }));
+  }, []);
+
+  useEffect(() => {
+    const TICK_MS = 250;
+    const timer = setInterval(() => {
+      const cycleDurationSec = isPlaying ? 8.0 : 36.0;
+      const dPhase = ((TICK_MS / 1000) / cycleDurationSec) * 4.0;
+
+      setSeasonPhase((prev) => {
+        const next = prev + dPhase;
+        if (next >= 4.0) {
+          setWorld((prevWorld) => advanceTimeline(prevWorld, 1));
+          return next - 4.0;
+        }
+        return next;
+      });
+    }, TICK_MS);
+
+    return () => clearInterval(timer);
+  }, [isPlaying]);
+
+  useEffect(() => {
+    const weatherTimer = setInterval(() => {
+      const rollAnomaly = Math.random() < 0.45;
+      if (rollAnomaly) {
+        setActiveWeather(generateSpontaneousAnomaly(seasonalState.currentSeason, world));
+      } else {
+        setActiveWeather(generateSeasonalWeather(seasonalState.currentSeason, world));
+      }
+    }, 14000);
+
+    return () => clearInterval(weatherTimer);
+  }, [seasonalState.currentSeason, world]);
+
+  const handleRegenerate = useCallback(() => {
+    setIsGenerating(true);
+    setTimeout(() => {
+      const newSeed = `Realm-${Math.floor(Math.random() * 90000 + 10000)}`;
+      const newSettings = { ...settings, seed: newSeed };
+      setSettings(newSettings);
+      const newWorld = generateWorld(newSettings);
+      setWorld(newWorld);
+      setSelectedRealmId(newWorld.realms[0]?.id);
+      setSelectedBurgId(undefined);
+      setSelectedCountyId(newWorld.counties[0]?.id);
+      setActiveWeather(generateSeasonalWeather(seasonalState.currentSeason, newWorld));
+      setIsGenerating(false);
+    }, 60);
+  }, [settings, seasonalState.currentSeason]);
+
+  const handleUpdateSettings = useCallback((newSettings: WorldSettings) => {
+    setSettings(newSettings);
+    const newWorld = generateWorld(newSettings);
+    setWorld(newWorld);
+    setSelectedRealmId(newWorld.realms[0]?.id);
+    setSelectedBurgId(undefined);
+    setSelectedCountyId(newWorld.counties[0]?.id);
+    setActiveWeather(generateSeasonalWeather(seasonalState.currentSeason, newWorld));
+  }, [seasonalState.currentSeason]);
+
+  const handleAdvanceYears = useCallback((years: number) => {
+    setWorld((prev) => advanceTimeline(prev, years));
+    setActiveWeather(generateSeasonalWeather(seasonalState.currentSeason, world));
+  }, [seasonalState.currentSeason, world]);
+
+  const handleSelectRealm = useCallback((realm: Realm) => {
+    setSelectedRealmId(realm.id);
+  }, []);
+
+  const handleSelectBurg = useCallback((burg: Burg) => {
+    setSelectedBurgId(burg.id);
+  }, []);
+
+  const handleSelectCounty = useCallback((county: County) => {
+    setSelectedCountyId(county.id);
+  }, []);
+
+  const handleSelectCharacter = useCallback((char: Character) => {
+    setSelectedRealmId(char.realmId);
+    if (char.countyId) {
+      setSelectedCountyId(char.countyId);
+    }
+  }, []);
+
+  const handleOpenCompendiumForEntity = useCallback((entityId: string) => {
+    setCompendiumInitialEntityId(entityId);
+    setIsCompendiumOpen(true);
+  }, []);
+
+  const handleWeaveStoryForCharacter = useCallback((char: Character) => {
+    setSelectedRealmId(char.realmId);
+    if (char.countyId) setSelectedCountyId(char.countyId);
+    setCurrentView('sagas');
+  }, []);
+
+  const handleWeaveStoryForTarget = useCallback((realm?: Realm, burg?: Burg) => {
+    if (realm) setSelectedRealmId(realm.id);
+    if (burg) setSelectedBurgId(burg.id);
+    setCurrentView('sagas');
+  }, []);
+
+  const handleSagaCreated = useCallback((_newStory: SagaStory) => {
+    setWorld((prev) => ({ ...prev }));
+  }, []);
+
+  return (
+    <div className="relative w-screen h-screen bg-stone-950 text-stone-100 overflow-hidden font-sans selection:bg-amber-800">
+      
+      {/* Immersive Full-Bleed Map Canvas Layer */}
+      <div className="absolute inset-0 z-0">
+        <MapCanvas
+          world={world}
+          activeLayers={activeLayers}
+          onToggleLayer={handleToggleLayer}
+          selectedRealmId={selectedRealmId}
+          selectedBurgId={selectedBurgId}
+          selectedCountyId={selectedCountyId}
+          onSelectBurg={handleSelectBurg}
+          onSelectRealm={handleSelectRealm}
+          onSelectCounty={handleSelectCounty}
+          onWeaveStoryForTarget={handleWeaveStoryForTarget}
+          currentSeason={seasonalState.currentSeason}
+          activeWeather={activeWeather}
+          seasonalState={seasonalState}
+        />
+      </div>
+
+      {/* Floating Glassmorphic Top Bar */}
+      <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20 w-full max-w-5xl px-4 pointer-events-none">
+        <div className="pointer-events-auto">
+          <TopBar
+            currentView={currentView}
+            onChangeView={setCurrentView}
+            onOpenCompendium={() => {
+              setCompendiumInitialEntityId(undefined);
+              setIsCompendiumOpen(true);
+            }}
+            settings={settings}
+            onUpdateSettings={handleUpdateSettings}
+            onRegenerate={handleRegenerate}
+            isGenerating={isGenerating}
+          />
+        </div>
+      </div>
+
+      {/* Floating Timeline Controls */}
+      <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-20 pointer-events-none">
+        <div className="pointer-events-auto">
+          <TimelineBar
+            currentYear={world.currentYear}
+            onAdvanceYears={handleAdvanceYears}
+            recentEvents={world.history}
+            onOpenChronicles={() => setCurrentView('chronicles')}
+            isPlaying={isPlaying}
+            onTogglePlay={() => setIsPlaying((p) => !p)}
+          />
+        </div>
+      </div>
+
+      {/* Contextual Sliding Panels based on currentView */}
+      <AnimatePresence>
+        {currentView === 'map' ? (
+          selectedRealmId && (
+            <CourtDossier
+              world={world}
+              selectedRealm={selectedRealm}
+              selectedBurg={selectedBurg}
+              selectedCounty={selectedCounty}
+              onSelectCharacter={handleSelectCharacter}
+              onSelectRealm={handleSelectRealm}
+              onSelectBurg={handleSelectBurg}
+              onSelectCounty={handleSelectCounty}
+              onOpenCompendiumForEntity={handleOpenCompendiumForEntity}
+              onWeaveStoryForCharacter={handleWeaveStoryForCharacter}
+              onUpdateWorld={setWorld}
+            />
+          )
+        ) : currentView === 'sagas' ? (
+          <motion.div initial={{opacity: 0, y: 50}} animate={{opacity: 1, y: 0}} exit={{opacity: 0, y: 50}} className="absolute inset-0 z-30 pt-24 px-8 pb-8 pointer-events-none">
+             <div className="w-full h-full pointer-events-auto shadow-2xl rounded-2xl overflow-hidden border border-white/10">
+               <SagaWeaver world={world} onSagaCreated={handleSagaCreated} onOpenCompendiumForEntity={handleOpenCompendiumForEntity} />
+             </div>
+          </motion.div>
+        ) : (
+          <motion.div initial={{opacity: 0, scale: 0.95}} animate={{opacity: 1, scale: 1}} exit={{opacity: 0, scale: 0.95}} className="absolute inset-0 z-30 pt-24 px-8 pb-8 pointer-events-none">
+             <div className="w-full h-full pointer-events-auto shadow-2xl rounded-2xl overflow-hidden border border-white/10">
+               <ChroniclesView world={world} onSelectRealmById={(realmId) => { setSelectedRealmId(realmId); setCurrentView('map'); }} onOpenCompendiumForEntity={handleOpenCompendiumForEntity} />
+             </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* WeasyPrint Compendium of the Realm Modal */}
+      <CompendiumModal
+        isOpen={isCompendiumOpen}
+        onClose={() => setIsCompendiumOpen(false)}
+        entities={world.loreEntities}
+        currentYear={world.currentYear}
+        selectedEntityId={compendiumInitialEntityId}
+      />
+    </div>
+  );
+}
+--- END OF FILE src/App.tsx ---
+
+2. src/components/CourtDossier.tsx
+
+--- START OF FILE src/components/CourtDossier.tsx ---
+import React, { useState, useMemo } from 'react';
+import { Realm, Character, Burg, County, WorldState, HistoricalEvent } from '../types/world';
+import {
+  BookOpen,
+  Feather,
+  Skull,
+  Eye,
+  Heart,
+  Shield,
+  Crown,
+  Flame,
+  Key,
+  Award,
+  Sparkles,
+  Zap,
+  Swords,
+  Search,
+  Users,
+  Compass,
+  Lock,
+  ChevronDown,
+  ChevronUp,
+  Coins,
+  Navigation,
+  Anchor,
+  Scale,
+} from 'lucide-react';
+import { CK3_TRAITS, computeCharacterStats } from '../engine/fantasyTables';
+import { CK3EventModal } from './CK3EventModal';
+import { V17GrandStrategyPanels } from './V17GrandStrategyPanels';
+import { computeTotalGravitas } from '../engine/v17GrandStrategyEngine';
+import { motion } from 'motion/react';
+
+interface CourtDossierProps {
+  world: WorldState;
+  selectedRealm?: Realm;
+  selectedBurg?: Burg;
+  selectedCounty?: County;
+  onSelectCharacter: (char: Character) => void;
+  onSelectRealm: (realm: Realm) => void;
+  onSelectBurg: (burg: Burg) => void;
+  onSelectCounty?: (county: County) => void;
+  onOpenCompendiumForEntity: (entityId: string) => void;
+  onWeaveStoryForCharacter?: (char: Character) => void;
+  onUpdateWorld?: (newWorld: WorldState) => void;
+}
+
+export const CourtDossier: React.FC<CourtDossierProps> = ({
+  world,
+  selectedRealm,
+  selectedBurg,
+  selectedCounty,
+  onSelectCharacter,
+  onSelectRealm,
+  onSelectBurg,
+  onSelectCounty,
+  onOpenCompendiumForEntity,
+  onWeaveStoryForCharacter,
+  onUpdateWorld,
+}) => {
+  const [activeTab, setActiveTab] = useState<
+    | 'dynasty'
+    | 'council'
+    | 'dignitaries'
+    | 'vassals'
+    | 'travel'
+    | 'claims'
+    | 'feuds'
+    | 'plague'
+    | 'laws'
+    | 'commerce'
+    | 'prisoners'
+    | 'roster'
+    | 'citadel'
+    | 'county'
+  >('dynasty');
+  const [inspectedCharId, setInspectedCharId] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [isEventModalOpen, setIsEventModalOpen] = useState(false);
+  const [notificationMsg, setNotificationMsg] = useState<string | null>(null);
+
+  const [isRealmPickerOpen, setIsRealmPickerOpen] = useState(false);
+  const [isCountyPickerOpen, setIsCountyPickerOpen] = useState(false);
+  const [isBurgPickerOpen, setIsBurgPickerOpen] = useState(false);
+
+  const realm = selectedRealm || world.realms[0];
+  const ruler = world.characters.find((c) => c.id === realm?.rulerId) || world.characters[0];
+  const capital = world.burgs.find((b) => b.id === realm?.capitalBurgId);
+  const burg = selectedBurg || capital;
+  const county = selectedCounty || (burg ? world.counties.find((c) => c.id === burg.countyId) : undefined);
+  const countyRuler = county ? world.characters.find((c) => c.id === county.rulerId) : undefined;
+
+  const realmRoutes = useMemo(() => {
+    if (!world.tradeNetwork || !realm) return [];
+    const realmBurgIds = new Set(world.burgs.filter((b) => b.stateId === realm.id).map((b) => b.id));
+    return world.tradeNetwork.routes.filter(
+      (r) => realmBurgIds.has(r.fromBurgId) || realmBurgIds.has(r.toBurgId)
+    );
+  }, [world.tradeNetwork, realm, world.burgs]);
+
+  const realmCaravans = useMemo(() => {
+    if (!world.tradeNetwork || !realm) return [];
+    const routeIds = new Set(realmRoutes.map((r) => r.id));
+    return world.tradeNetwork.caravans.filter((c) => routeIds.has(c.routeId));
+  }, [world.tradeNetwork, realmRoutes]);
+
+  const burgConnectedRoutes = useMemo(() => {
+    if (!world.tradeNetwork || !burg) return [];
+    return world.tradeNetwork.routes.filter(
+      (r) => r.fromBurgId === burg.id || r.toBurgId === burg.id
+    );
+  }, [world.tradeNetwork, burg]);
+
+  const realmChars = useMemo(() => world.characters.filter((c) => c.realmId === realm?.id), [world.characters, realm]);
+  const activeChar = useMemo(() => {
+    if (inspectedCharId) {
+      return world.characters.find((c) => c.id === inspectedCharId) || ruler;
+    }
+    return ruler;
+  }, [inspectedCharId, world.characters, ruler]);
+
+  const spouse = activeChar?.spouseId ? world.characters.find((c) => c.id === activeChar.spouseId) : undefined;
+  const heir = activeChar?.heirId ? world.characters.find((c) => c.id === activeChar.heirId) : undefined;
+  const rival = activeChar?.rivalId ? world.characters.find((c) => c.id === activeChar.rivalId) : undefined;
+  const lover = activeChar?.loverId ? world.characters.find((c) => c.id === activeChar.loverId) : undefined;
+
+  const dynastyMembers = useMemo(() => realmChars.filter((c) =>
+    ['Monarch', 'Consort', 'Crown Heir', 'Cadet Prince', 'Cadet Princess', 'Legitimated Bastard', 'Disinherited Bastard', 'Dowager Regent', 'Royal Uncle'].includes(c.role)
+  ), [realmChars]);
+
+  const councilMembers = useMemo(() => realmChars.filter((c) =>
+    ['Chancellor', 'Marshal', 'Steward', 'Spymaster', 'Court Chaplain'].includes(c.role)
+  ), [realmChars]);
+
+  const dignitaries = useMemo(() => realmChars.filter((c) =>
+    ['Court Champion', 'Court Physician', 'Court Antiquarian', 'Grand Equerry', 'Royal Cupbearer', 'High Inquisitor', 'Court Jester'].includes(c.role)
+  ), [realmChars]);
+
+  const vassals = useMemo(() => realmChars.filter((c) =>
+    ['Vassal Duke', 'Vassal Count', 'Vassal Consort', 'Vassal Heir'].includes(c.role)
+  ), [realmChars]);
+
+  const prisoners = useMemo(() => realmChars.filter((c) =>
+    ['Dungeon Prisoner', 'Exiled Claimant'].includes(c.role)
+  ), [realmChars]);
+
+  const filteredRoster = useMemo(() => {
+    if (!searchQuery.trim()) return realmChars;
+    const q = searchQuery.toLowerCase();
+    return realmChars.filter(
+      (c) =>
+        c.name.toLowerCase().includes(q) ||
+        c.title.toLowerCase().includes(q) ||
+        c.role.toLowerCase().includes(q) ||
+        c.personalityTraits.some((t) => t.toLowerCase().includes(q)) ||
+        c.educationTrait?.toLowerCase().includes(q) ||
+        c.aiArchetype.toLowerCase().includes(q)
+    );
+  }, [realmChars, searchQuery]);
+
+  const handleApplyEventOutcome = (outcomeText: string, updatedWorld: WorldState) => {
+    if (onUpdateWorld) {
+      onUpdateWorld(updatedWorld);
+    }
+    setNotificationMsg(outcomeText);
+    setTimeout(() => setNotificationMsg(null), 6000);
+  };
+
+  const handleExecuteScheme = (char: Character) => {
+    if (!char.activeScheme || !onUpdateWorld) return;
+    const updated = JSON.parse(JSON.stringify(world)) as WorldState;
+    const actor = updated.characters.find((c) => c.id === char.id)!;
+    const target = updated.characters.find((c) => c.id === char.activeScheme!.targetId);
+
+    const schemeName = char.activeScheme.type;
+    const success = Math.random() < 0.65;
+
+    if (success && target) {
+      if (schemeName === 'Murder') {
+        target.isAlive = false;
+        setNotificationMsg(`Assassination Succeeded! ${target.name} perished from poisoned wine.`);
+      } else {
+        setNotificationMsg(`Conspiracy Succeeded! ${schemeName} against ${target.name} has borne fruit.`);
+      }
+      actor.prestige += 150;
+      actor.dread = Math.min(100, actor.dread + 20);
+      actor.activeScheme = undefined;
+    } else {
+      setNotificationMsg(`Conspiracy Foiled! Spymasters intercepted the plot by ${char.name}.`);
+      actor.stress += 50;
+      actor.activeScheme = undefined;
+    }
+
+    onUpdateWorld(updated);
+  };
+
+  if (!realm || !ruler) return null;
+
+  const loreEntity = world.loreEntities.find((e) => e.stateId === realm.id || e.burgId === burg?.id);
+
+  return (
+    <motion.aside
+      initial={{ x: '100%' }}
+      animate={{ x: 0 }}
+      exit={{ x: '100%' }}
+      transition={{ type: 'spring', stiffness: 300, damping: 30 }}
+      className="fixed right-4 top-20 bottom-24 w-96 flex flex-col bg-stone-900/60 backdrop-blur-2xl border border-white/10 rounded-2xl text-stone-200 overflow-hidden shadow-2xl select-text z-30"
+    >
+      {/* Realm Header */}
+      <div className="p-4 border-b border-white/5 bg-black/20">
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <span
+              className="w-10 h-10 rounded-xl flex items-center justify-center text-2xl shadow-md border border-stone-700 shrink-0"
+              style={{ backgroundColor: realm.heraldry.bg, color: realm.heraldry.fg }}
+            >
+              {realm.heraldry.symbol}
+            </span>
+            <div className="min-w-0">
+              <h2 className="font-cinzel font-bold text-base text-amber-100 leading-tight truncate">
+                {realm.name}
+              </h2>
+              <div className="text-[11px] text-stone-400 mt-0.5 truncate">
+                <span>{realm.culture}</span>
+                <span className="mx-1 text-stone-600">·</span>
+                <span>{realm.religion}</span>
+                <span className="mx-1 text-stone-600">·</span>
+                <span className="text-amber-500 font-medium">{realmChars.length} Court Nobles</span>
+              </div>
+            </div>
+          </div>
+
+          {loreEntity && (
+            <button
+              onClick={() => onOpenCompendiumForEntity(loreEntity.id)}
+              title="Open Compendium Chapter"
+              className="p-1.5 text-stone-400 hover:text-amber-400 hover:bg-stone-800 rounded-lg transition-colors cursor-pointer shrink-0"
+            >
+              <BookOpen className="w-4 h-4" />
+            </button>
+          )}
+        </div>
+
+        {/* Interactive Feudal Hierarchy Selector Strip */}
+        <div className="mt-2.5 pt-2 border-t border-stone-800/80 space-y-1.5">
+          <div className="text-[9px] font-bold uppercase tracking-wider text-stone-400 flex items-center justify-between">
+            <span className="flex items-center gap-1">
+              <Scale className="w-3 h-3 text-amber-500" />
+              <span>Feudal Domain & Fief</span>
+            </span>
+            <span className="text-[9px] text-amber-400 font-normal">Select & Inspect</span>
+          </div>
+
+          <div className="grid grid-cols-3 gap-1 text-[10px]">
+            {/* 1. Kingdom Picker Button */}
+            <div className="relative">
+              <button
+                onClick={() => {
+                  setIsRealmPickerOpen(!isRealmPickerOpen);
+                  setIsCountyPickerOpen(false);
+                  setIsBurgPickerOpen(false);
+                }}
+                className={`w-full p-1.5 rounded-lg border text-left flex items-center justify-between gap-1 transition-all cursor-pointer ${
+                  isRealmPickerOpen
+                    ? 'bg-amber-950 border-amber-600 text-amber-200'
+                    : 'bg-stone-900/50 border-stone-800 hover:border-amber-700/60 text-stone-200'
+                }`}
+              >
+                <div className="truncate flex items-center gap-1">
+                  <span className="shrink-0">👑</span>
+                  <span className="truncate font-serif font-semibold">{realm.name.replace('Kingdom of ', '')}</span>
+                </div>
+                <ChevronDown className="w-2.5 h-2.5 shrink-0 text-stone-400" />
+              </button>
+
+              {isRealmPickerOpen && (
+                <div className="absolute top-full left-0 mt-1 w-64 bg-stone-950 border border-amber-600/70 rounded-xl shadow-2xl z-50 p-1.5 space-y-1 max-h-64 overflow-y-auto">
+                  <div className="text-[9px] uppercase font-bold text-amber-400 px-2 py-1 border-b border-stone-800">
+                    Kingdoms & Sovereign Realms ({world.realms.length})
+                  </div>
+                  {world.realms.map((r) => {
+                    const isCur = r.id === realm.id;
+                    const rRuler = world.characters.find((c) => c.id === r.rulerId);
+                    return (
+                      <div
+                        key={r.id}
+                        onClick={() => {
+                          onSelectRealm(r);
+                          const rBurg = world.burgs.find((b) => b.id === r.capitalBurgId) || world.burgs.find((b) => b.stateId === r.id);
+                          if (rBurg) {
+                            onSelectBurg(rBurg);
+                            const ct = world.counties.find((c) => c.id === rBurg.countyId);
+                            if (ct && onSelectCounty) onSelectCounty(ct);
+                          }
+                          setIsRealmPickerOpen(false);
+                        }}
+                        className={`p-2 rounded-lg cursor-pointer flex items-center justify-between text-xs transition-colors ${
+                          isCur ? 'bg-amber-900/60 text-amber-200 font-bold border border-amber-700/50' : 'hover:bg-stone-800 text-stone-300'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2 truncate">
+                          <span
+                            className="w-5 h-5 rounded flex items-center justify-center text-xs shrink-0"
+                            style={{ backgroundColor: r.heraldry.bg, color: r.heraldry.fg }}
+                          >
+                            {r.heraldry.symbol}
+                          </span>
+                          <div className="truncate">
+                            <div className="truncate font-medium">{r.name}</div>
+                            <div className="text-[9px] text-stone-400">{r.culture} · {rRuler?.name || 'Monarch'}</div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* 2. County / Duchy Picker Button */}
+            <div className="relative">
+              <button
+                onClick={() => {
+                  setIsCountyPickerOpen(!isCountyPickerOpen);
+                  setIsRealmPickerOpen(false);
+                  setIsBurgPickerOpen(false);
+                }}
+                className={`w-full p-1.5 rounded-lg border text-left flex items-center justify-between gap-1 transition-all cursor-pointer ${
+                  isCountyPickerOpen
+                    ? 'bg-amber-950 border-amber-600 text-amber-200'
+                    : 'bg-stone-900/50 border-stone-800 hover:border-amber-700/60 text-stone-200'
+                }`}
+              >
+                <div className="truncate flex items-center gap-1.5 min-w-0">
+                  <span className="shrink-0">🛡️</span>
+                  <div className="truncate min-w-0 text-left">
+                    <span className="truncate font-serif font-semibold block leading-tight">{county?.name || 'County'}</span>
+                  </div>
+                </div>
+                <ChevronDown className="w-2.5 h-2.5 shrink-0 text-stone-400 ml-0.5" />
+              </button>
+
+              {isCountyPickerOpen && (
+                <div className="absolute top-full left-0 mt-1 w-64 bg-stone-950 border border-amber-600/70 rounded-xl shadow-2xl z-50 p-1.5 space-y-1 max-h-64 overflow-y-auto">
+                  <div className="text-[9px] uppercase font-bold text-amber-400 px-2 py-1 border-b border-stone-800 flex items-center justify-between">
+                    <span>Counties, Duchies & Marches</span>
+                    <span>{world.counties.length} Total</span>
+                  </div>
+                  {world.counties.map((ct) => {
+                    const isCur = ct.id === county?.id;
+                    const ctRealm = world.realms.find((r) => r.id === ct.realmId);
+                    const ctCap = world.burgs.find((b) => b.id === ct.capitalBurgId);
+                    const ctLord = world.characters.find((c) => c.id === ct.rulerId);
+                    return (
+                      <div
+                        key={ct.id}
+                        onClick={() => {
+                          if (onSelectCounty) onSelectCounty(ct);
+                          if (ctRealm) onSelectRealm(ctRealm);
+                          if (ctCap) onSelectBurg(ctCap);
+                          setActiveTab('county');
+                          setIsCountyPickerOpen(false);
+                        }}
+                        className={`p-2 rounded-lg cursor-pointer flex items-center justify-between text-xs transition-colors ${
+                          isCur ? 'bg-amber-900/60 text-amber-200 font-bold border border-amber-700/50' : 'hover:bg-stone-800 text-stone-300'
+                        }`}
+                      >
+                        <div className="truncate">
+                          <div className="truncate font-serif font-medium">{ct.name}</div>
+                          <div className="text-[9px] text-stone-400">
+                            {ctLord ? <span className="text-amber-300 font-medium">Lord: {ctLord.title}</span> : `Caput: ${ctCap?.name}`}
+                          </div>
+                        </div>
+                        <span className="text-[9px] px-1 py-0.5 rounded bg-stone-900 text-amber-400 font-mono shrink-0 ml-1">
+                          {ctRealm?.name.split(' ')[0]}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* 3. Settlement / Burg Picker Button */}
+            <div className="relative">
+              <button
+                onClick={() => {
+                  setIsBurgPickerOpen(!isBurgPickerOpen);
+                  setIsRealmPickerOpen(false);
+                  setIsCountyPickerOpen(false);
+                }}
+                className={`w-full p-1.5 rounded-lg border text-left flex items-center justify-between gap-1 transition-all cursor-pointer ${
+                  isBurgPickerOpen
+                    ? 'bg-amber-950 border-amber-600 text-amber-200'
+                    : 'bg-stone-900/50 border-stone-800 hover:border-amber-700/60 text-stone-200'
+                }`}
+              >
+                <div className="truncate flex items-center gap-1">
+                  <span className="shrink-0">{burg?.isCapital ? '👑' : burg?.type.includes('Port') ? '⚓' : '🏰'}</span>
+                  <span className="truncate font-serif font-semibold">{burg?.name || 'Settlement'}</span>
+                </div>
+                <ChevronDown className="w-2.5 h-2.5 shrink-0 text-stone-400" />
+              </button>
+
+              {isBurgPickerOpen && (
+                <div className="absolute top-full right-0 mt-1 w-68 bg-stone-950 border border-amber-600/70 rounded-xl shadow-2xl z-50 p-1.5 space-y-1 max-h-64 overflow-y-auto">
+                  <div className="text-[9px] uppercase font-bold text-amber-400 px-2 py-1 border-b border-stone-800 flex items-center justify-between">
+                    <span>Cities, Towns, Ports & Citadels</span>
+                    <span>{world.burgs.length} Total</span>
+                  </div>
+                  {world.burgs.map((b) => {
+                    const isCur = b.id === burg?.id;
+                    const bRealm = world.realms.find((r) => r.id === b.stateId);
+                    const bCounty = world.counties.find((c) => c.id === b.countyId);
+                    const icon = b.isCapital ? '👑' : b.type.includes('Port') ? '⚓' : b.type.includes('Village') ? '🌾' : b.type.includes('Hamlet') ? '⛰️' : '🏰';
+                    return (
+                      <div
+                        key={b.id}
+                        onClick={() => {
+                          onSelectBurg(b);
+                          if (bRealm) onSelectRealm(bRealm);
+                          if (bCounty && onSelectCounty) onSelectCounty(bCounty);
+                          setActiveTab('citadel');
+                          setIsBurgPickerOpen(false);
+                        }}
+                        className={`p-2 rounded-lg cursor-pointer flex items-center justify-between text-xs transition-colors ${
+                          isCur ? 'bg-amber-900/60 text-amber-200 font-bold border border-amber-700/50' : 'hover:bg-stone-800 text-stone-300'
+                        }`}
+                      >
+                        <div className="truncate flex items-center gap-2">
+                          <span className="shrink-0">{icon}</span>
+                          <div className="truncate">
+                            <div className="truncate font-serif font-medium">{b.name}</div>
+                            <div className="text-[9px] text-stone-400">
+                              {b.type} · {b.population.toLocaleString()} souls
+                            </div>
+                          </div>
+                        </div>
+                        <span className="text-[9px] px-1 py-0.5 rounded bg-stone-900 text-stone-400 font-mono shrink-0">
+                          {bRealm?.name.split(' ')[0]}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Tab Selector with all CK3 Court Divisions & Fiefs */}
+        <div className="flex items-center gap-1 mt-3 p-1 bg-stone-900/50 rounded-lg border border-white/5 text-[10px] overflow-x-auto">
+          <button
+            onClick={() => setActiveTab('dynasty')}
+            className={`py-1 px-2 rounded text-center transition-colors cursor-pointer shrink-0 ${
+              activeTab === 'dynasty'
+                ? 'bg-amber-700 text-white font-semibold shadow-sm'
+                : 'text-stone-400 hover:text-stone-200'
+            }`}
+          >
+            Dynasty ({dynastyMembers.length})
+          </button>
+          <button
+            onClick={() => setActiveTab('council')}
+            className={`py-1 px-2 rounded text-center transition-colors cursor-pointer shrink-0 ${
+              activeTab === 'council'
+                ? 'bg-amber-700 text-white font-semibold shadow-sm'
+                : 'text-stone-400 hover:text-stone-200'
+            }`}
+          >
+            Council ({councilMembers.length})
+          </button>
+          <button
+            onClick={() => setActiveTab('dignitaries')}
+            className={`py-1 px-2 rounded text-center transition-colors cursor-pointer shrink-0 ${
+              activeTab === 'dignitaries'
+                ? 'bg-amber-700 text-white font-semibold shadow-sm'
+                : 'text-stone-400 hover:text-stone-200'
+            }`}
+          >
+            Dignitaries ({dignitaries.length})
+          </button>
+          <button
+            onClick={() => setActiveTab('vassals')}
+            className={`py-1 px-2 rounded text-center transition-colors cursor-pointer shrink-0 ${
+              activeTab === 'vassals'
+                ? 'bg-amber-700 text-white font-semibold shadow-sm'
+                : 'text-stone-400 hover:text-stone-200'
+            }`}
+          >
+            Vassals ({vassals.length})
+          </button>
+          <button
+            onClick={() => setActiveTab('travel')}
+            className={`py-1 px-2 rounded text-center transition-colors cursor-pointer shrink-0 ${
+              activeTab === 'travel'
+                ? 'bg-amber-700 text-white font-semibold shadow-sm'
+                : 'text-stone-400 hover:text-stone-200'
+            }`}
+          >
+            🧭 Travel
+          </button>
+          <button
+            onClick={() => setActiveTab('claims')}
+            className={`py-1 px-2 rounded text-center transition-colors cursor-pointer shrink-0 ${
+              activeTab === 'claims'
+                ? 'bg-amber-700 text-white font-semibold shadow-sm'
+                : 'text-stone-400 hover:text-stone-200'
+            }`}
+          >
+            ⚔️ Claims ({activeChar?.claims?.length || 0})
+          </button>
+          <button
+            onClick={() => setActiveTab('feuds')}
+            className={`py-1 px-2 rounded text-center transition-colors cursor-pointer shrink-0 ${
+              activeTab === 'feuds'
+                ? 'bg-amber-700 text-white font-semibold shadow-sm'
+                : 'text-stone-400 hover:text-stone-200'
+            }`}
+          >
+            🔥 Feuds ({Object.keys(world.cadetHouses || {}).length})
+          </button>
+          <button
+            onClick={() => setActiveTab('plague')}
+            className={`py-1 px-2 rounded text-center transition-colors cursor-pointer shrink-0 ${
+              activeTab === 'plague'
+                ? 'bg-red-800 text-white font-semibold shadow-sm'
+                : (world.epidemics?.length || 0) > 0 ? 'text-red-400 hover:text-red-300 font-bold' : 'text-stone-400 hover:text-stone-200'
+            }`}
+          >
+            ☠️ Plague ({world.epidemics?.length || 0})
+          </button>
+          <button
+            onClick={() => setActiveTab('laws')}
+            className={`py-1 px-2 rounded text-center transition-colors cursor-pointer shrink-0 ${
+              activeTab === 'laws'
+                ? 'bg-amber-700 text-white font-semibold shadow-sm'
+                : 'text-stone-400 hover:text-stone-200'
+            }`}
+          >
+            ⚖️ Laws
+          </button>
+          {prisoners.length > 0 && (
+            <button
+              onClick={() => setActiveTab('prisoners')}
+              className={`py-1 px-2 rounded text-center transition-colors cursor-pointer shrink-0 ${
+                activeTab === 'prisoners'
+                  ? 'bg-red-800 text-white font-semibold shadow-sm'
+                  : 'text-red-400 hover:text-red-200'
+              }`}
+            >
+              Captives ({prisoners.length})
+            </button>
+          )}
+          <button
+            onClick={() => setActiveTab('commerce')}
+            className={`py-1 px-2 rounded text-center transition-colors cursor-pointer shrink-0 ${
+              activeTab === 'commerce'
+                ? 'bg-amber-700 text-white font-semibold shadow-sm'
+                : 'text-stone-400 hover:text-stone-200'
+            }`}
+          >
+            Commerce ({realmRoutes.length})
+          </button>
+          <button
+            onClick={() => setActiveTab('roster')}
+            className={`py-1 px-2 rounded text-center transition-colors cursor-pointer shrink-0 ${
+              activeTab === 'roster'
+                ? 'bg-amber-700 text-white font-semibold shadow-sm'
+                : 'text-stone-400 hover:text-stone-200'
+            }`}
+          >
+            All ({realmChars.length})
+          </button>
+          {county && (
+            <button
+              onClick={() => setActiveTab('county')}
+              className={`py-1 px-2 rounded text-center transition-colors cursor-pointer shrink-0 ${
+                activeTab === 'county'
+                  ? 'bg-amber-700 text-white font-semibold shadow-sm'
+                  : 'text-stone-300 hover:text-white font-medium'
+              }`}
+            >
+              🛡️ County
+            </button>
+          )}
+          {burg && (
+            <button
+              onClick={() => setActiveTab('citadel')}
+              className={`py-1 px-2 rounded text-center transition-colors cursor-pointer shrink-0 ${
+                activeTab === 'citadel'
+                  ? 'bg-amber-700 text-white font-semibold shadow-sm'
+                  : 'text-stone-300 hover:text-white font-medium'
+              }`}
+            >
+              🏰 Burg
+            </button>
+          )}
+        </div>
+      </div>
+
+      {notificationMsg && (
+        <div className="p-3 bg-amber-950/90 border-b border-amber-600/70 text-amber-200 text-xs font-serif italic animate-in fade-in flex items-center justify-between">
+          <span>{notificationMsg}</span>
+          <button onClick={() => setNotificationMsg(null)} className="text-amber-400 hover:text-white ml-2">×</button>
+        </div>
+      )}
+
+      {/* Tab Body */}
+      <div className="flex-1 overflow-y-auto p-4 space-y-4 text-xs">
+        
+        {/* Tab 1: Dynasty Tree View (Visual Lineage!) */}
+        {activeTab === 'dynasty' && (
+          <div className="flex flex-col items-center justify-center w-full py-4 space-y-4">
+            {/* Parents Layer */}
+            <div className="flex items-center gap-4">
+              <CharacterPortraitNode char={ruler} isPrimary onClick={() => { setInspectedCharId(ruler.id); onSelectCharacter(ruler); }} />
+              {ruler.spouseId && (
+                <>
+                  <div className="w-4 h-[2px] bg-amber-700/50" />
+                  <CharacterPortraitNode char={world.characters.find(c => c.id === ruler.spouseId)!} onClick={() => { setInspectedCharId(ruler.spouseId!); onSelectCharacter(world.characters.find(c => c.id === ruler.spouseId)!); }} />
+                </>
+              )}
+            </div>
+
+            {/* Connecting Line Down */}
+            <div className="w-[2px] h-6 bg-amber-700/50" />
+
+            {/* Children Layer */}
+            <div className="flex flex-wrap justify-center gap-4 border-t-2 border-amber-700/50 pt-4 relative w-[90%]">
+               {/* Top little connection stubs */}
+               {dynastyMembers.filter(c => c.id !== ruler.id && c.id !== ruler.spouseId).map(child => (
+                 <div key={child.id} className="relative flex flex-col items-center">
+                   <div className="w-[2px] h-4 bg-amber-700/50 absolute -top-4" />
+                   <CharacterPortraitNode char={child} onClick={() => { setInspectedCharId(child.id); onSelectCharacter(child); }} />
+                 </div>
+               ))}
+            </div>
+          </div>
+        )}
+
+        {/* Render Inspected Character Card if active tab is not citadel/county */}
+        {activeTab !== 'citadel' && activeTab !== 'county' && activeTab !== 'dynasty' && activeChar && (
+          <CharacterDetailCard
+            char={activeChar}
+            world={world}
+            spouse={spouse}
+            heir={heir}
+            rival={rival}
+            lover={lover}
+            onSelectCharacter={(c) => {
+              setInspectedCharId(c.id);
+              onSelectCharacter(c);
+            }}
+            onTriggerEvent={() => setIsEventModalOpen(true)}
+            onExecuteScheme={() => handleExecuteScheme(activeChar)}
+            onWeaveStoryForCharacter={onWeaveStoryForCharacter}
+            isMonarch={activeChar.id === ruler.id}
+          />
+        )}
+
+        {/* Tab 2: Royal Council */}
+        {activeTab === 'council' && (
+          <div className="space-y-2 pt-2 border-t border-stone-800">
+            <div className="text-[10px] uppercase font-bold text-stone-400 tracking-wider">
+              Small Privy Council of State ({councilMembers.length})
+            </div>
+            {councilMembers.map((member) => (
+              <CharacterListItem
+                key={member.id}
+                char={member}
+                isSelected={member.id === activeChar?.id}
+                onSelect={() => {
+                  setInspectedCharId(member.id);
+                  onSelectCharacter(member);
+                }}
+              />
+            ))}
+          </div>
+        )}
+
+        {/* Tab 3: Court Dignitaries */}
+        {activeTab === 'dignitaries' && (
+          <div className="space-y-2 pt-2 border-t border-stone-800">
+            <div className="text-[10px] uppercase font-bold text-stone-400 tracking-wider">
+              High Court Retinue & Dignitaries ({dignitaries.length})
+            </div>
+            {dignitaries.map((member) => (
+              <CharacterListItem
+                key={member.id}
+                char={member}
+                isSelected={member.id === activeChar?.id}
+                onSelect={() => {
+                  setInspectedCharId(member.id);
+                  onSelectCharacter(member);
+                }}
+              />
+            ))}
+          </div>
+        )}
+
+        {/* Tab 4: Vassals */}
+        {activeTab === 'vassals' && (
+          <div className="space-y-2 pt-2 border-t border-stone-800">
+            <div className="text-[10px] uppercase font-bold text-stone-400 tracking-wider">
+              Sworn Lords of the Marches & Dynasties ({vassals.length})
+            </div>
+            {vassals.map((member) => (
+              <CharacterListItem
+                key={member.id}
+                char={member}
+                isSelected={member.id === activeChar?.id}
+                onSelect={() => {
+                  setInspectedCharId(member.id);
+                  onSelectCharacter(member);
+                }}
+              />
+            ))}
+          </div>
+        )}
+
+        {/* V17 Grand Strategy Master Edition Panels */}
+        {['travel', 'claims', 'feuds', 'plague', 'laws'].includes(activeTab) && (
+          <V17GrandStrategyPanels
+            activeTab={activeTab as 'travel' | 'claims' | 'feuds' | 'plague' | 'laws'}
+            activeChar={activeChar}
+            world={world}
+            onUpdateWorld={(w) => {
+              if (onUpdateWorld) onUpdateWorld(w);
+            }}
+            onNotify={(msg) => {
+              setNotificationMsg(msg);
+              setTimeout(() => setNotificationMsg(null), 6000);
+            }}
+            onSelectCharacter={(c) => {
+              setInspectedCharId(c.id);
+              onSelectCharacter(c);
+            }}
+          />
+        )}
+
+        {/* Tab 5: Prisoners & Pretenders */}
+        {activeTab === 'prisoners' && (
+          <div className="space-y-2 pt-2 border-t border-stone-800">
+            <div className="text-[10px] uppercase font-bold text-red-400 tracking-wider flex items-center gap-1">
+              <Lock className="w-3 h-3" />
+              <span>Dungeon Captives & Exiled Pretenders ({prisoners.length})</span>
+            </div>
+            {prisoners.map((member) => (
+              <CharacterListItem
+                key={member.id}
+                char={member}
+                isSelected={member.id === activeChar?.id}
+                onSelect={() => {
+                  setInspectedCharId(member.id);
+                  onSelectCharacter(member);
+                }}
+              />
+            ))}
+          </div>
+        )}
+
+        {/* Tab 6: Complete Roster with Search */}
+        {activeTab === 'roster' && (
+          <div className="space-y-2.5 pt-2 border-t border-stone-800">
+            <div className="relative">
+              <Search className="w-3.5 h-3.5 text-stone-500 absolute left-2.5 top-2.5" />
+              <input
+                type="text"
+                placeholder="Search by name, role, trait, or archetype..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="w-full pl-8 pr-3 py-1.5 bg-stone-950 border border-stone-800 rounded-lg text-xs text-stone-200 placeholder-stone-500 focus:outline-none focus:border-amber-600"
+              />
+            </div>
+
+            <div className="text-[10px] uppercase font-bold text-stone-400 tracking-wider">
+              Dramatis Personae ({filteredRoster.length})
+            </div>
+
+            {filteredRoster.map((member) => (
+              <CharacterListItem
+                key={member.id}
+                char={member}
+                isSelected={member.id === activeChar?.id}
+                onSelect={() => {
+                  setInspectedCharId(member.id);
+                  onSelectCharacter(member);
+                }}
+              />
+            ))}
+          </div>
+        )}
+
+        {/* Tab: Commerce & Trade Routes */}
+        {activeTab === 'commerce' && (
+          <div className="space-y-3.5">
+            <div className="p-3.5 bg-stone-950/80 border border-stone-800 rounded-xl space-y-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="font-serif font-bold text-sm text-stone-100 flex items-center gap-1.5">
+                    <Coins className="w-4 h-4 text-amber-400" />
+                    <span>Commercial Network & Trade Routes</span>
+                  </h3>
+                  <div className="text-[11px] text-stone-400">
+                    A* dual-mesh overland highways, mountain gaps & maritime lanes
+                  </div>
+                </div>
+                <div className="text-right">
+                  <div className="text-xs font-mono font-bold text-amber-400">
+                    {realmRoutes.length} Artery{realmRoutes.length !== 1 ? 'ies' : ''}
+                  </div>
+                  <div className="text-[10px] text-stone-500">
+                    {realmCaravans.length} active caravans
+                  </div>
+                </div>
+              </div>
+
+              {/* Trade Hubs Ranking */}
+              <div className="space-y-2 pt-1">
+                <div className="text-[10px] uppercase font-bold text-stone-400 tracking-wider flex items-center justify-between">
+                  <span>Major Realm Trade Hubs</span>
+                  <span className="text-[9px] text-stone-500">Volume Index</span>
+                </div>
+                <div className="space-y-1.5">
+                  {world.tradeNetwork?.tradeHubs
+                    .filter((hub) => world.burgs.find((b) => b.id === hub.burgId)?.stateId === realm.id)
+                    .map((hub, idx) => (
+                      <div
+                        key={hub.burgId}
+                        onClick={() => {
+                          const b = world.burgs.find((x) => x.id === hub.burgId);
+                          if (b) onSelectBurg(b);
+                        }}
+                        className="p-2 bg-stone-900/90 hover:bg-stone-800/90 border border-stone-800/80 rounded-lg flex items-center justify-between cursor-pointer transition-colors"
+                      >
+                        <div className="flex items-center gap-2">
+                          <span className="font-mono text-xs text-amber-500 font-bold">#{idx + 1}</span>
+                          <div>
+                            <div className="font-medium text-stone-200 text-xs">{hub.name}</div>
+                            <div className="text-[10px] text-stone-400 flex items-center gap-1">
+                              <span>Exports:</span>
+                              <span className="text-amber-300 font-medium">{hub.primaryExports.join(', ')}</span>
+                            </div>
+                          </div>
+                        </div>
+                        <div className="text-right">
+                          <span className="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-amber-950/80 text-amber-400 border border-amber-800/40">
+                            {hub.totalTradeVolume} Vol
+                          </span>
+                          <div className="text-[9px] text-stone-500 mt-0.5">{hub.connectedRoutesCount} routes</div>
+                        </div>
+                      </div>
+                    ))}
+                </div>
+              </div>
+
+              {/* Connecting Trade Routes */}
+              <div className="space-y-2 pt-1">
+                <div className="text-[10px] uppercase font-bold text-stone-400 tracking-wider">
+                  Sovereign Trade Corridors
+                </div>
+                <div className="space-y-1.5 max-h-52 overflow-y-auto pr-1">
+                  {realmRoutes.map((route) => {
+                    const isHighway = route.type === 'Imperial Highway';
+                    const isSea = route.type === 'Maritime Sea Lane';
+                    const isPass = route.type === 'Mountain Pass';
+
+                    return (
+                      <div
+                        key={route.id}
+                        className="p-2 bg-stone-900/60 border border-stone-800 rounded-lg space-y-1 text-[11px]"
+                      >
+                        <div className="flex items-center justify-between font-medium">
+                          <span className="text-stone-200 flex items-center gap-1">
+                            <span>{isSea ? '⛵' : isHighway ? '👑' : isPass ? '⛰️' : '🛣️'}</span>
+                            <span>{route.fromBurgName} ↔ {route.toBurgName}</span>
+                          </span>
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded font-mono ${
+                            isHighway ? 'bg-amber-950 text-amber-300 border border-amber-700/50' :
+                            isSea ? 'bg-cyan-950 text-cyan-300 border border-cyan-700/50' :
+                            isPass ? 'bg-stone-800 text-stone-300' :
+                            'bg-amber-950/40 text-amber-400'
+                          }`}>
+                            {route.type}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between text-[10px] text-stone-400">
+                          <span>Cargo: <strong className="text-amber-300">{route.primaryGood}</strong></span>
+                          <span>{route.distanceKm} km · Tier {route.trafficVolume} Flow</span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Active Trader Caravans & Ships */}
+              {realmCaravans.length > 0 && (
+                <div className="space-y-2 pt-1 border-t border-stone-800/80">
+                  <div className="text-[10px] uppercase font-bold text-stone-400 tracking-wider flex items-center justify-between">
+                    <span>Active Merchant Convoys</span>
+                    <span className="text-[9px] text-amber-400 animate-pulse">● Live Transit</span>
+                  </div>
+                  <div className="space-y-1.5 max-h-40 overflow-y-auto pr-1">
+                    {realmCaravans.map((caravan) => (
+                      <div
+                        key={caravan.id}
+                        className="p-2 bg-stone-900/40 border border-stone-800/60 rounded-lg text-[10px] space-y-1"
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="text-stone-200 flex items-center gap-1.5">
+                            <span>{caravan.isMaritime ? '⛵' : '🐎'}</span>
+                            <span>{caravan.fromBurgName} → {caravan.toBurgName}</span>
+                          </span>
+                          <span className="text-amber-300 font-medium font-mono">{caravan.commodity}</span>
+                        </div>
+                        <div className="w-full bg-stone-950 rounded-full h-1.5 overflow-hidden">
+                          <div
+                            className="bg-amber-500 h-full rounded-full transition-all duration-300"
+                            style={{ width: `${Math.round(caravan.progress * 100)}%` }}
+                          />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Tab: Citadel & Province */}
+        {activeTab === 'citadel' && burg && (
+          <div className="space-y-3">
+            <div className="p-4 bg-stone-950/80 border border-stone-800 rounded-xl space-y-3">
+              <div>
+                <h3 className="font-serif font-bold text-base text-stone-100">{burg.name}</h3>
+                <div className="text-amber-400 text-xs font-medium">{burg.type}</div>
+              </div>
+
+              <div className="p-3 bg-stone-900 rounded-lg border border-stone-800 text-[11px] font-serif leading-relaxed text-stone-300">
+                {burg.lore}
+              </div>
+
+              <div className="grid grid-cols-2 gap-2 text-[11px]">
+                <div className="p-2.5 bg-stone-900 rounded-lg border border-stone-800">
+                  <div className="text-stone-400">Population</div>
+                  <div className="text-sm font-bold text-stone-100 font-mono mt-0.5">
+                    {burg.population.toLocaleString()} souls
+                  </div>
+                </div>
+                <div className="p-2.5 bg-stone-900 rounded-lg border border-stone-800">
+                  <div className="text-stone-400">Trade Export</div>
+                  <div className="text-xs font-semibold text-amber-300 mt-0.5 truncate">
+                    {burg.tradeGood}
+                  </div>
+                </div>
+              </div>
+
+              <div className="p-2.5 bg-stone-900 rounded-lg border border-stone-800 text-[11px] space-y-1">
+                <div className="text-stone-400 text-[10px] uppercase font-bold tracking-wider">
+                  Geographic Site Advantage
+                </div>
+                <div className="font-medium text-amber-300 flex items-center gap-1.5">
+                  <span>
+                    {burg.settlementSite === 'Estuary Harbor' ? '🌊' :
+                     burg.settlementSite === 'River Confluence' ? '🏞️' :
+                     burg.settlementSite === 'Mountain Pass' ? '⛰️' :
+                     burg.settlementSite === 'Fertile Basin' ? '🌾' : '🛣️'}
+                  </span>
+                  <span>{burg.settlementSite || 'Inland Crossroad'}</span>
+                </div>
+                <div className="text-[10px] text-stone-400 leading-normal">
+                  {burg.settlementSite === 'Estuary Harbor'
+                    ? 'Natural sheltered harbor where deep river channels meet ocean tides, enabling maritime shipping and inland barge transport.'
+                    : burg.settlementSite === 'River Confluence'
+                    ? 'Strategic inland trade fork where major river branches merge, creating a natural meeting point for regional commerce.'
+                    : burg.settlementSite === 'Mountain Pass'
+                    ? 'Fortified alpine saddle controlling the single mountain pass through the high crags, extracting toll and providing defense.'
+                    : burg.settlementSite === 'Fertile Basin'
+                    ? 'Lush agricultural flood basin with rich topsoil and gentle slopes supporting dense peasant populations and grain harvests.'
+                    : 'Historic overland crossroad where merchant roads converge from surrounding marches.'}
+                </div>
+              </div>
+
+              {burgConnectedRoutes.length > 0 && (
+                <div className="space-y-1.5 pt-1">
+                  <div className="text-[10px] uppercase font-bold text-stone-400 tracking-wider">
+                    Connected Trade Routes ({burgConnectedRoutes.length})
+                  </div>
+                  <div className="space-y-1.5">
+                    {burgConnectedRoutes.map((route) => {
+                      const otherName = route.fromBurgId === burg.id ? route.toBurgName : route.fromBurgName;
+                      return (
+                        <div
+                          key={route.id}
+                          className="p-2 bg-stone-900 rounded-lg border border-stone-800 flex items-center justify-between text-[11px]"
+                        >
+                          <div>
+                            <div className="font-medium text-stone-200">
+                              {route.isMaritime ? '⛵' : '🛣️'} To {otherName}
+                            </div>
+                            <div className="text-[10px] text-stone-400">
+                              {route.type} · {route.distanceKm} km
+                            </div>
+                          </div>
+                          <div className="text-right">
+                            <span className="text-amber-300 font-semibold">{route.primaryGood}</span>
+                            <div className="text-[9px] text-stone-500 font-mono">Tier {route.trafficVolume} Flow</div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {county && (
+                <div className="text-[11px] text-stone-400 pt-1">
+                  Caput of {county.name} · Development Index {county.development}/100
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Tab: County & Feudal Fief */}
+        {activeTab === 'county' && county && (
+          <div className="space-y-3">
+            <div className="p-4 bg-stone-950/80 border border-stone-800 rounded-xl space-y-3">
+              <div className="flex items-start justify-between">
+                <div>
+                  <div className="text-[10px] uppercase font-bold text-amber-500 tracking-wider">
+                    Feudal Fief & March
+                  </div>
+                  <h3 className="font-serif font-bold text-base text-stone-100">{county.name}</h3>
+                  <div className="text-[11px] text-stone-400">
+                    Sworn to {realm.name} · Tradition: {county.tradition || 'Ancient Feudal Custom'}
+                  </div>
+                </div>
+                <div className="p-2 bg-stone-900 border border-stone-800 rounded-lg text-right shrink-0">
+                  <div className="text-[10px] text-stone-400">Development</div>
+                  <div className="font-mono font-bold text-sm text-amber-400">{county.development}/100</div>
+                </div>
+              </div>
+
+              {(() => {
+                const lord = countyRuler;
+                if (!lord) return null;
+                const liegeMonarch = world.characters.find((c) => c.id === realm.rulerId);
+                const lordOpinionOfLiege = liegeMonarch && lord.opinions ? (lord.opinions[liegeMonarch.id] ?? 25) : 25;
+                const isLoyal = lordOpinionOfLiege >= 0;
+
+                return (
+                  <div className="p-3 bg-stone-900 border border-amber-600/40 rounded-xl space-y-2.5 shadow-md">
+                    <div className="flex items-center justify-between border-b border-stone-800 pb-2">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-amber-400 text-xs">👑</span>
+                        <span className="text-[10px] uppercase font-bold text-amber-400 tracking-wider">
+                          Fief Sovereign & Ruler
+                        </span>
+                      </div>
+                      <span className={`text-[10px] font-mono px-2 py-0.5 rounded font-bold ${
+                        isLoyal ? 'bg-emerald-950/80 text-emerald-300 border border-emerald-700/40' : 'bg-red-950/80 text-red-300 border border-red-700/40'
+                      }`}>
+                        {isLoyal ? `+${lordOpinionOfLiege} Loyal Vassal` : `${lordOpinionOfLiege} Discontented`}
+                      </span>
+                    </div>
+
+                    <div className="flex items-start gap-3">
+                      <div
+                        className="w-11 h-11 rounded-lg flex items-center justify-center text-lg border border-amber-600/50 shadow-inner shrink-0"
+                        style={{ backgroundColor: lord.coatOfArms.bg, color: lord.coatOfArms.fg }}
+                      >
+                        {lord.coatOfArms.symbol}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center justify-between">
+                          <div className="text-xs font-serif font-bold text-amber-100 truncate">
+                            {lord.name}
+                          </div>
+                          <span className="text-[10px] text-stone-400 capitalize">{lord.gender}, {lord.age}y</span>
+                        </div>
+                        <div className="text-[11px] text-amber-400 font-medium">
+                          {lord.title}
+                        </div>
+                        <div className="text-[10px] text-stone-400 italic truncate mt-0.5">
+                          "{lord.houseMotto || 'Guardians of the Ancient Marches'}"
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2 pt-1 border-t border-stone-800/80 text-[10px]">
+                      <div>
+                        <div className="text-stone-500 uppercase tracking-wider text-[9px] mb-1 font-bold">Traits</div>
+                        <div className="flex flex-wrap gap-1">
+                          {lord.personalityTraits.slice(0, 3).map((trait) => (
+                            <span key={trait} className="px-1.5 py-0.5 rounded bg-stone-950 text-stone-300 border border-stone-800 text-[9px]">
+                              {trait}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                      <div>
+                        <div className="text-stone-500 uppercase tracking-wider text-[9px] mb-1 font-bold">Attributes</div>
+                        <div className="flex items-center gap-1.5 font-mono text-[9px] text-stone-300">
+                          <span>MAR <strong className="text-red-400">{lord.baseMartial}</strong></span>
+                          <span>DIP <strong className="text-blue-400">{lord.baseDiplomacy}</strong></span>
+                          <span>STE <strong className="text-amber-400">{lord.baseStewardship}</strong></span>
+                          <span>INT <strong className="text-purple-400">{lord.baseIntrigue}</strong></span>
+                        </div>
+                      </div>
+                    </div>
+
+                    {lord.activeScheme && (
+                      <div className="p-2 bg-stone-950 border border-amber-900/40 rounded-lg text-[10px] space-y-0.5">
+                        <div className="flex items-center justify-between font-semibold text-amber-300">
+                          <span className="flex items-center gap-1">
+                            <span>🗡️ Plot:</span>
+                            <span>{lord.activeScheme.type}</span>
+                          </span>
+                          <span className="font-mono text-[9px] text-amber-400">{lord.activeScheme.progress}%</span>
+                        </div>
+                        <div className="text-stone-400 text-[9px] leading-tight">
+                          {lord.activeScheme.motive}
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="flex items-center gap-2 pt-1">
+                      <button
+                        onClick={() => {
+                          setInspectedCharId(lord.id);
+                          onSelectCharacter(lord);
+                        }}
+                        className="flex-1 py-1 px-2 rounded bg-stone-800 hover:bg-stone-700 text-stone-200 text-[10px] font-medium text-center transition-colors cursor-pointer"
+                      >
+                        Inspect Dossier →
+                      </button>
+                      {onWeaveStoryForCharacter && (
+                        <button
+                          onClick={() => onWeaveStoryForCharacter(lord)}
+                          className="py-1 px-2 rounded bg-amber-900/60 hover:bg-amber-800/80 text-amber-200 text-[10px] font-medium transition-colors cursor-pointer"
+                        >
+                          Weave Saga 📜
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {(() => {
+                const prov = world.provinces?.find((p) => p.name === county.name || p.cellIndices?.some((idx) => county.cellIndices.includes(idx)));
+                const holdings = world.holdings?.filter((h) => prov && h.provinceId === prov.id) || [];
+                const isQuarantined = prov && world.lockedDownProvinces?.includes(prov.id);
+
+                return (
+                  <div className="space-y-2 pt-1">
+                    <div className="p-2.5 bg-stone-900/90 border border-stone-800 rounded-lg space-y-2 text-[11px]">
+                      <div className="flex items-center justify-between">
+                        <span className="text-stone-400">Terrain Geography:</span>
+                        <span className="font-bold text-amber-300 flex items-center gap-1">
+                          <span>{prov?.terrain === 'Mountains' ? '🏔️ Mountains (+40% Def)' : prov?.terrain === 'Forest' ? '🌲 Forest (+20% Def)' : prov?.terrain === 'Coastal' ? '🌊 Coastal' : '🌾 Plains'}</span>
+                        </span>
+                      </div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-stone-400">Sanitary Lockdown:</span>
+                        <span className={`font-bold ${isQuarantined ? 'text-red-400' : 'text-emerald-400'}`}>
+                          {isQuarantined ? '🔒 Quarantined' : 'Open Borders'}
+                        </span>
+                      </div>
+                    </div>
+
+                    {holdings.length > 0 && (
+                      <div className="space-y-1 pt-1">
+                        <div className="text-[10px] uppercase font-bold text-stone-400 tracking-wider">
+                          County Holdings ({holdings.length})
+                        </div>
+                        <div className="space-y-1">
+                          {holdings.map((h) => {
+                            const owner = world.characters.find((c) => c.id === h.ownerId);
+                            return (
+                              <div
+                                key={h.id}
+                                className="p-2 bg-stone-900/60 border border-stone-800 rounded-lg flex items-center justify-between text-[11px]"
+                              >
+                                <div className="flex items-center gap-1.5">
+                                  <span>{h.estateType === 'Castle' ? '🏰' : h.estateType === 'City' ? '🏙️' : '⛪'}</span>
+                                  <div>
+                                    <div className="font-semibold text-stone-200">{h.name}</div>
+                                    <div className="text-[10px] text-stone-400">
+                                      {h.estateType} · Ruler: {owner?.name || 'Unassigned'}
+                                    </div>
+                                  </div>
+                                </div>
+                                <div className="text-right text-[10px] font-mono">
+                                  <div className="text-amber-400">{Math.round(h.baseTax * (h.dev / 10))}g Tax</div>
+                                  <div className="text-stone-400">{Math.round(h.baseLevy * (h.dev / 10))} Levies</div>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                );
+              })()}
+
+              {(() => {
+                const countyBurgs = world.burgs.filter((b) => b.countyId === county.id);
+                if (countyBurgs.length === 0) return null;
+                return (
+                  <div className="space-y-1.5 pt-1 border-t border-stone-800/80">
+                    <div className="text-[10px] uppercase font-bold text-stone-400 tracking-wider">
+                      Constituent Settlements & Citadels ({countyBurgs.length})
+                    </div>
+                    <div className="space-y-1.5">
+                      {countyBurgs.map((b) => (
+                        <div
+                          key={b.id}
+                          onClick={() => {
+                            onSelectBurg(b);
+                            setActiveTab('citadel');
+                          }}
+                          className={`p-2 rounded-lg border flex items-center justify-between cursor-pointer transition-colors ${
+                            b.id === burg?.id
+                              ? 'bg-amber-950/70 border-amber-600 text-amber-200'
+                              : 'bg-stone-900/80 border-stone-800 hover:border-amber-700/50 text-stone-300'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2">
+                            <span>{b.isCapital ? '👑' : b.type.includes('Port') ? '⚓' : b.type.includes('Village') ? '🌾' : '🏰'}</span>
+                            <div>
+                              <div className="font-serif font-bold text-xs">{b.name}</div>
+                              <div className="text-[10px] text-stone-400">{b.type} · Exports {b.tradeGood}</div>
+                            </div>
+                          </div>
+                          <span className="font-mono text-[10px] text-stone-400 font-bold">
+                            {b.population.toLocaleString()} souls
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+          </div>
+        )}
+      </div>
+
+      {isEventModalOpen && activeChar && (
+        <CK3EventModal
+          isOpen={isEventModalOpen}
+          onClose={() => setIsEventModalOpen(false)}
+          character={activeChar}
+          world={world}
+          onApplyEventOutcome={handleApplyEventOutcome}
+        />
+      )}
+    </motion.aside>
+  );
+};
+
+interface CharacterDetailCardProps {
+  char: Character;
+  world: WorldState;
+  spouse?: Character;
+  heir?: Character;
+  rival?: Character;
+  lover?: Character;
+  onSelectCharacter: (char: Character) => void;
+  onTriggerEvent: () => void;
+  onExecuteScheme: () => void;
+  onWeaveStoryForCharacter?: (char: Character) => void;
+  isMonarch: boolean;
+}
+
+const CharacterDetailCard: React.FC<CharacterDetailCardProps> = ({
+  char,
+  world,
+  spouse,
+  heir,
+  rival,
+  lover,
+  onSelectCharacter,
+  onTriggerEvent,
+  onExecuteScheme,
+  onWeaveStoryForCharacter,
+  isMonarch,
+}) => {
+  const [showOpinions, setShowOpinions] = useState(false);
+  const stats = computeCharacterStats(char);
+
+  const opinionEntries = useMemo(() => {
+    return Object.entries(char.opinions || {})
+      .map(([targetId, score]) => {
+        const other = world.characters.find((c) => c.id === targetId);
+        return { targetId, name: other?.name || 'Unknown Noble', role: other?.role, score };
+      })
+      .filter((e) => Math.abs(e.score) >= 15)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 6);
+  }, [char.opinions, world.characters]);
+
+  const charProvince = world.provinces?.find((p) => p.id === char.provinceId);
+  const destProvince = char.travelDestProvinceId
+    ? world.provinces?.find((p) => p.id === char.travelDestProvinceId)
+    : null;
+  const totalGravitas = Math.round(
+    computeTotalGravitas(
+      char.organicGravitas || {
+        militaryAutonomy: 120,
+        economicExtraction: 50,
+        populistLoyalty: 200,
+        lineagePrestige: 50,
+        sovereignDebtHeld: 0,
+      }
+    )
+  );
+
+  const terrainIcon =
+    charProvince?.terrain === 'Mountains'
+      ? '🏔️'
+      : charProvince?.terrain === 'Forest'
+      ? '🌲'
+      : charProvince?.terrain === 'Coastal'
+      ? '🌊'
+      : '🌾';
+
+  return (
+    <div className="p-4 bg-stone-950/90 border border-stone-800 rounded-xl space-y-3.5 shadow-xl">
+      <div className="flex items-start gap-3">
+        <div
+          className="w-13 h-13 rounded-xl border-2 border-amber-500/80 flex items-center justify-center text-2xl shadow-xl shrink-0"
+          style={{ backgroundColor: char.coatOfArms.bg, color: char.coatOfArms.fg }}
+        >
+          {char.coatOfArms.symbol}
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-1.5">
+            {isMonarch ? (
+              <Crown className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+            ) : (
+              <Shield className="w-3.5 h-3.5 text-stone-400 shrink-0" />
+            )}
+            <h3 className="font-serif font-bold text-sm text-stone-100 truncate">
+              {char.name}
+            </h3>
+          </div>
+          <div className="text-[11px] text-amber-400 font-medium truncate mt-0.5">
+            {char.title}
+          </div>
+          <div className="flex items-center gap-1.5 text-[10px] text-stone-400 mt-0.5">
+            <span>House {char.houseName}</span>
+            <span className="text-stone-600">·</span>
+            <span>Age {char.age}</span>
+            <span className="text-stone-600">·</span>
+            <span className="px-1.5 py-0.2 bg-amber-950/60 border border-amber-700/50 text-amber-300 rounded font-medium">
+              {char.aiArchetype}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <div className="p-2 bg-stone-900 border border-stone-800 rounded-lg text-stone-300 italic text-[11px] text-center font-serif">
+        "{char.houseMotto}"
+      </div>
+
+      <div className="p-2.5 bg-stone-900/95 border border-amber-900/50 rounded-xl space-y-1.5 shadow-inner">
+        <div className="flex items-center justify-between text-[10px] font-bold uppercase tracking-wider">
+          <span className="text-amber-400 flex items-center gap-1">
+            <span>{terrainIcon}</span>
+            <span>{charProvince?.name || 'Capital Province'}</span>
+            <span className="text-stone-400 font-normal">({charProvince?.terrain || 'Plains'})</span>
+          </span>
+          <span className="text-stone-400 font-mono">
+            {char.courtPosition?.orbit === 'INNER_RING'
+              ? '👑 Inner Ring'
+              : char.courtPosition?.orbit === 'MIDDLE_RING'
+              ? '🛡️ Middle Ring'
+              : '🏛️ Outer Ring'}
+          </span>
+        </div>
+
+        {char.isTraveling && destProvince ? (
+          <div className="p-1.5 bg-amber-950/70 border border-amber-700/60 rounded-lg text-[10px] text-amber-200 flex items-center justify-between animate-pulse">
+            <span className="flex items-center gap-1">
+              <span>🏇</span>
+              <span>In transit to <strong>{destProvince.name}</strong> ({char.travelPurpose || 'Court Embassy'})</span>
+            </span>
+            <span className="font-mono font-bold">{char.travelMonthsLeft}mo left</span>
+          </div>
+        ) : (
+          <div className="flex items-center justify-between text-[10px] text-stone-400">
+            <span>Seat Defense: <strong className="text-amber-300">+{charProvince?.terrain === 'Mountains' ? '40%' : charProvince?.terrain === 'Forest' ? '20%' : '10%'}</strong></span>
+            <span>Psyche: <strong className="text-stone-200">{char.psychState || 'Normal'}</strong></span>
+          </div>
+        )}
+
+        <div className="grid grid-cols-2 gap-1 pt-0.5 text-[10px]">
+          <div className="p-1 bg-stone-950/70 rounded border border-stone-800 flex items-center justify-between px-2">
+            <span className="text-stone-400">⚔️ Men-at-Arms:</span>
+            <span className="font-mono font-bold text-amber-300">{char.menAtArms || 100}</span>
+          </div>
+          <div className="p-1 bg-stone-950/70 rounded border border-stone-800 flex items-center justify-between px-2">
+            <span className="text-stone-400">👑 Gravitas:</span>
+            <span className="font-mono font-bold text-amber-300">{totalGravitas}</span>
+          </div>
+        </div>
+      </div>
+
+      <button
+        onClick={onTriggerEvent}
+        className="w-full py-2 bg-gradient-to-r from-amber-700 via-amber-600 to-amber-700 hover:from-amber-600 hover:to-amber-500 text-white rounded-lg text-xs font-bold flex items-center justify-center gap-2 transition-all cursor-pointer shadow-md border border-amber-500/60"
+      >
+        <Sparkles className="w-3.5 h-3.5" />
+        <span>Trigger Court Dilemma / Decision</span>
+      </button>
+
+      <div>
+        <div className="text-[10px] uppercase font-bold text-stone-400 tracking-wider mb-1.5 flex items-center justify-between">
+          <span>Core Attributes</span>
+          <span className="text-amber-400 font-mono text-[10px] font-bold">Prowess: {stats.prowess}</span>
+        </div>
+        <div className="grid grid-cols-5 gap-1.5 text-center">
+          <div className="p-1.5 bg-stone-900 border border-stone-800 rounded-lg" title="Diplomacy: Treaties & Court Vassal Relations">
+            <div className="text-[11px]">🕊️</div>
+            <div className="text-[9px] text-stone-400 font-sans">DIP</div>
+            <div className="text-xs font-bold text-stone-100 font-mono">{stats.diplomacy}</div>
+          </div>
+          <div className="p-1.5 bg-stone-900 border border-stone-800 rounded-lg" title="Martial: Battlefield Command & Levy Sizes">
+            <div className="text-[11px]">⚔️</div>
+            <div className="text-[9px] text-stone-400 font-sans">MAR</div>
+            <div className="text-xs font-bold text-stone-100 font-mono">{stats.martial}</div>
+          </div>
+          <div className="p-1.5 bg-stone-900 border border-stone-800 rounded-lg" title="Stewardship: Domain Taxes & County Development">
+            <div className="text-[11px]">💰</div>
+            <div className="text-[9px] text-stone-400 font-sans">STE</div>
+            <div className="text-xs font-bold text-stone-100 font-mono">{stats.stewardship}</div>
+          </div>
+          <div className="p-1.5 bg-stone-900 border border-stone-800 rounded-lg" title="Intrigue: Assassinations, Blackmail & Secrets">
+            <div className="text-[11px]">🗡️</div>
+            <div className="text-[9px] text-stone-400 font-sans">INT</div>
+            <div className="text-xs font-bold text-stone-100 font-mono">{stats.intrigue}</div>
+          </div>
+          <div className="p-1.5 bg-stone-900 border border-stone-800 rounded-lg" title="Learning: Pious Dogma, Research & Medicine">
+            <div className="text-[11px]">📜</div>
+            <div className="text-[9px] text-stone-400 font-sans">LRN</div>
+            <div className="text-xs font-bold text-stone-100 font-mono">{stats.learning}</div>
+          </div>
+        </div>
+      </div>
+
+      <div className="p-2.5 bg-stone-900/90 border border-stone-800 rounded-xl space-y-2">
+        <div className="flex items-center justify-between text-[11px]">
+          <span className="flex items-center gap-1 font-semibold text-stone-300">
+            <Zap className="w-3.5 h-3.5 text-amber-400" />
+            <span>Stress: {char.stress}/300</span>
+          </span>
+          <span className="text-[10px] font-medium text-amber-300">
+            {char.stressCopingMechanism ? `Coping: ${char.stressCopingMechanism}` : char.stress > 85 ? 'Strained' : 'Serene'}
+          </span>
+        </div>
+        <div className="w-full bg-stone-950 h-1.5 rounded-full overflow-hidden">
+          <div
+            className={`h-full rounded-full transition-all ${
+              char.stress > 180 ? 'bg-red-500' : char.stress > 85 ? 'bg-amber-500' : 'bg-emerald-500'
+            }`}
+            style={{ width: `${Math.min(100, (char.stress / 300) * 100)}%` }}
+          />
+        </div>
+
+        <div className="grid grid-cols-3 gap-1 pt-1 text-center text-[10px]">
+          <div className="p-1 bg-stone-950/60 rounded border border-stone-800" title="Prestige: Fame in tournaments and feasts">
+            <span className="text-stone-400">👑 Fame:</span> <span className="font-bold text-amber-200">{char.prestige}</span>
+          </div>
+          <div className="p-1 bg-stone-950/60 rounded border border-stone-800" title="Piety: Devotion to the holy priesthood">
+            <span className="text-stone-400">☀️ Piety:</span> <span className="font-bold text-amber-200">{char.piety}</span>
+          </div>
+          <div className="p-1 bg-stone-950/60 rounded border border-stone-800" title="Dread: Fear and submission inspired in vassals">
+            <span className="text-stone-400">💀 Dread:</span> <span className="font-bold text-red-300">{stats.dread}/100</span>
+          </div>
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        <div className="text-[10px] uppercase font-bold text-stone-400 tracking-wider">
+          Active Trait Spectrum ({[...(char.personalityTraits || []), char.educationTrait, ...(char.congenitalTraits || []), ...(char.physicalHealthTraits || []), ...(char.commanderTraits || []), ...(char.lifestyleTraits || []), char.statusTrait].filter(Boolean).length})
+        </div>
+        <div className="flex flex-wrap gap-1.5">
+          {char.educationTrait && (
+            <span
+              title="Education Trait (Tier 1-4)"
+              className="px-2 py-0.5 bg-indigo-950/80 border border-indigo-600/70 rounded-md text-[10px] text-indigo-200 font-semibold flex items-center gap-1 cursor-help"
+            >
+              <span>🎓</span>
+              <span>{char.educationTrait}</span>
+            </span>
+          )}
+
+          {char.personalityTraits.map((tName) => {
+            const traitDef = CK3_TRAITS.find((x) => x.name.toLowerCase() === tName.toLowerCase());
+            return (
+              <span
+                key={tName}
+                title={traitDef?.description}
+                className="px-2 py-0.5 bg-stone-900 border border-stone-700/80 rounded-md text-[10px] text-amber-200 font-medium cursor-help"
+              >
+                {tName}
+              </span>
+            );
+          })}
+
+          {char.congenitalTraits.map((tName) => (
+            <span
+              key={tName}
+              title="Congenital / Genetic Trait"
+              className="px-2 py-0.5 bg-emerald-950/80 border border-emerald-600/70 rounded-md text-[10px] text-emerald-200 font-semibold flex items-center gap-1 cursor-help"
+            >
+              <span>🧬</span>
+              <span>{tName}</span>
+            </span>
+          ))}
+
+          {char.physicalHealthTraits.map((tName) => (
+            <span
+              key={tName}
+              title="Health / Physical Condition"
+              className="px-2 py-0.5 bg-rose-950/80 border border-rose-600/70 rounded-md text-[10px] text-rose-200 font-medium flex items-center gap-1 cursor-help"
+            >
+              <span>❤️‍🩹</span>
+              <span>{tName}</span>
+            </span>
+          ))}
+
+          {char.commanderTraits.map((tName) => (
+            <span
+              key={tName}
+              title="Commander Warfare Specialization"
+              className="px-2 py-0.5 bg-amber-950/80 border border-amber-600/70 rounded-md text-[10px] text-amber-200 font-medium flex items-center gap-1 cursor-help"
+            >
+              <span>⚔️</span>
+              <span>{tName}</span>
+            </span>
+          ))}
+
+          {char.lifestyleTraits.map((tName) => (
+            <span
+              key={tName}
+              title="Lifestyle / Fame & Infamy"
+              className="px-2 py-0.5 bg-purple-950/80 border border-purple-600/70 rounded-md text-[10px] text-purple-200 font-medium flex items-center gap-1 cursor-help"
+            >
+              <span>✨</span>
+              <span>{tName}</span>
+            </span>
+          ))}
+
+          {char.statusTrait && (
+            <span
+              title="Court & Dynastic Status"
+              className="px-2 py-0.5 bg-blue-950/80 border border-blue-600/70 rounded-md text-[10px] text-blue-200 font-semibold flex items-center gap-1 cursor-help"
+            >
+              <span>👑</span>
+              <span>{char.statusTrait}</span>
+            </span>
+          )}
+        </div>
+      </div>
+
+      {(spouse || heir || rival || lover) && (
+        <div className="space-y-1.5 pt-1">
+          <div className="text-[10px] uppercase font-bold text-stone-400 tracking-wider">
+            Court & Dynastic Ties
+          </div>
+          <div className="grid grid-cols-2 gap-1.5">
+            {spouse && (
+              <button
+                onClick={() => onSelectCharacter(spouse)}
+                className="p-2 bg-stone-900/90 border border-stone-800 hover:border-amber-600/50 rounded-lg text-left transition-colors cursor-pointer"
+              >
+                <div className="text-[9px] text-pink-400 font-semibold flex items-center gap-1">
+                  <Heart className="w-2.5 h-2.5" />
+                  <span>Spouse</span>
+                </div>
+                <div className="text-xs font-medium text-stone-200 truncate mt-0.5">{spouse.name}</div>
+              </button>
+            )}
+            {heir && (
+              <button
+                onClick={() => onSelectCharacter(heir)}
+                className="p-2 bg-stone-900/90 border border-stone-800 hover:border-amber-600/50 rounded-lg text-left transition-colors cursor-pointer"
+              >
+                <div className="text-[9px] text-amber-400 font-semibold flex items-center gap-1">
+                  <Crown className="w-2.5 h-2.5" />
+                  <span>Primary Heir</span>
+                </div>
+                <div className="text-xs font-medium text-stone-200 truncate mt-0.5">{heir.name}</div>
+              </button>
+            )}
+            {rival && (
+              <button
+                onClick={() => onSelectCharacter(rival)}
+                className="p-2 bg-stone-900/90 border border-stone-800 hover:border-red-600/50 rounded-lg text-left transition-colors cursor-pointer"
+              >
+                <div className="text-[9px] text-red-400 font-semibold flex items-center gap-1">
+                  <Skull className="w-2.5 h-2.5" />
+                  <span>Arch-Rival</span>
+                </div>
+                <div className="text-xs font-medium text-stone-200 truncate mt-0.5">{rival.name}</div>
+              </button>
+            )}
+            {lover && (
+              <button
+                onClick={() => onSelectCharacter(lover)}
+                className="p-2 bg-stone-900/90 border border-stone-800 hover:border-pink-600/50 rounded-lg text-left transition-colors cursor-pointer"
+              >
+                <div className="text-[9px] text-pink-300 font-semibold flex items-center gap-1">
+                  <Heart className="w-2.5 h-2.5" />
+                  <span>Secret Lover</span>
+                </div>
+                <div className="text-xs font-medium text-stone-200 truncate mt-0.5">{lover.name}</div>
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      {opinionEntries.length > 0 && (
+        <div className="p-2.5 bg-stone-900/70 border border-stone-800 rounded-xl space-y-1.5">
+          <button
+            onClick={() => setShowOpinions(!showOpinions)}
+            className="w-full flex items-center justify-between text-[10px] uppercase font-bold text-stone-400 tracking-wider cursor-pointer"
+          >
+            <span>Interpersonal Opinions ({opinionEntries.length})</span>
+            {showOpinions ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+          </button>
+
+          {showOpinions && (
+            <div className="space-y-1 pt-1">
+              {opinionEntries.map((op) => (
+                <div key={op.targetId} className="flex items-center justify-between text-[11px] py-0.5">
+                  <span className="text-stone-300 truncate">{op.name} ({op.role})</span>
+                  <span className={`font-mono font-bold ${op.score > 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                    {op.score > 0 ? `+${op.score}` : op.score}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      <div className="space-y-2 pt-1">
+        <div className="p-2.5 bg-stone-900/90 border border-stone-800 rounded-lg space-y-1">
+          <div className="text-[10px] uppercase font-bold text-amber-500 tracking-wider">
+            Core Ambition
+          </div>
+          <p className="text-stone-300 font-serif leading-snug">{char.ambition}</p>
+        </div>
+
+        <div className="p-2.5 bg-stone-900/90 border border-stone-800 rounded-lg space-y-1">
+          <div className="text-[10px] uppercase font-bold text-purple-400 tracking-wider flex items-center gap-1">
+            <Eye className="w-3 h-3" />
+            <span>Dark Secret</span>
+          </div>
+          <p className="text-stone-300 font-serif leading-snug">{char.darkSecret}</p>
+        </div>
+
+        {char.hooksHeld.length > 0 && (
+          <div className="p-2.5 bg-amber-950/40 border border-amber-800/60 rounded-lg space-y-1">
+            <div className="text-[10px] uppercase font-bold text-amber-400 tracking-wider flex items-center gap-1">
+              <Key className="w-3 h-3" />
+              <span>Blackmail Hooks Held</span>
+            </div>
+            {char.hooksHeld.map((h, i) => (
+              <p key={i} className="text-stone-300 font-serif leading-snug text-[11px]">
+                <strong className="text-amber-200">{h.type} Hook</strong> over {h.targetName}: {h.reason}
+              </p>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {char.activeScheme && (
+        <div className="p-3 bg-red-950/40 border border-red-900/60 rounded-xl space-y-2">
+          <div className="flex items-center justify-between text-red-300 font-semibold text-[11px]">
+            <span className="flex items-center gap-1.5">
+              <Skull className="w-3.5 h-3.5 text-red-400" />
+              <span>Conspiracy: {char.activeScheme.type}</span>
+            </span>
+            <span className="font-mono text-[10px] text-red-400 font-bold">
+              {char.activeScheme.progress}% Progress
+            </span>
+          </div>
+          <div className="w-full bg-stone-900 h-1.5 rounded-full overflow-hidden">
+            <div
+              className="bg-gradient-to-r from-red-600 to-amber-500 h-full rounded-full transition-all"
+              style={{ width: `${char.activeScheme.progress}%` }}
+            />
+          </div>
+          <div className="text-stone-300 text-[11px] pt-0.5">
+            Target: <span className="font-medium text-stone-100">{char.activeScheme.targetName}</span>
+          </div>
+          <div className="text-[10px] text-stone-400 italic">
+            "{char.activeScheme.motive}"
+          </div>
+
+          <button
+            onClick={onExecuteScheme}
+            className="w-full py-1.5 bg-red-800 hover:bg-red-700 text-white rounded-lg text-[11px] font-bold flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+          >
+            <Skull className="w-3 h-3" />
+            <span>Attempt Scheme Execution Now</span>
+          </button>
+        </div>
+      )}
+
+      {onWeaveStoryForCharacter && (
+        <button
+          onClick={() => onWeaveStoryForCharacter(char)}
+          className="w-full py-2.5 bg-stone-800 hover:bg-stone-700 text-stone-200 border border-stone-700 rounded-xl text-xs font-medium flex items-center justify-center gap-2 transition-colors cursor-pointer shadow-sm"
+        >
+          <Feather className="w-3.5 h-3.5 text-amber-400" />
+          <span>Weave Saga with {char.name.split(' ')[0]}</span>
+        </button>
+      )}
+    </div>
+  );
+};
+
+interface CharacterListItemProps {
+  char: Character;
+  isSelected: boolean;
+  onSelect: () => void;
+}
+
+const CharacterListItem: React.FC<CharacterListItemProps> = ({ char, isSelected, onSelect }) => {
+  return (
+    <div
+      onClick={onSelect}
+      className={`p-2.5 rounded-xl border transition-all cursor-pointer flex items-center justify-between gap-2.5 ${
+        isSelected
+          ? 'bg-amber-950/60 border-amber-600/80 shadow-md'
+          : 'bg-stone-950/60 border-stone-800 hover:border-amber-600/40 hover:bg-stone-900/60'
+      }`}
+    >
+      <div className="flex items-center gap-2.5 min-w-0">
+        <span
+          className="w-8 h-8 rounded-lg flex items-center justify-center text-base border border-stone-700 shrink-0 shadow-sm"
+          style={{ backgroundColor: char.coatOfArms.bg, color: char.coatOfArms.fg }}
+        >
+          {char.coatOfArms.symbol}
+        </span>
+        <div className="min-w-0">
+          <div className="font-serif font-bold text-stone-100 text-xs truncate">
+            {char.name}
+          </div>
+          <div className="text-[10px] text-amber-400 truncate">
+            {char.role} · <span className="text-stone-400">{char.aiArchetype}</span>
+          </div>
+        </div>
+      </div>
+
+      <div className="flex flex-col items-end shrink-0 text-[10px]">
+        <span className="text-stone-400 font-mono">Age {char.age}</span>
+        {char.activeScheme && (
+          <span className="text-red-400 font-bold flex items-center gap-0.5">
+            <Skull className="w-2.5 h-2.5" />
+            <span>Scheme</span>
+          </span>
+        )}
+      </div>
+    </div>
+  );
+};
+
+const CharacterPortraitNode = ({ char, isPrimary, onClick }: { char: Character, isPrimary?: boolean, onClick: () => void }) => {
+  return (
+    <div onClick={onClick} className="flex flex-col items-center gap-1 cursor-pointer group">
+      <div 
+        className={`w-12 h-12 rounded-full flex items-center justify-center text-xl shadow-lg border-2 transition-all ${isPrimary ? 'border-amber-400 ring-2 ring-amber-500/20' : 'border-stone-600 group-hover:border-amber-500'}`}
+        style={{ backgroundColor: char.coatOfArms.bg, color: char.coatOfArms.fg }}
+      >
+        {char.coatOfArms.symbol}
+      </div>
+      <div className="text-[10px] font-bold text-stone-200 group-hover:text-amber-300 text-center max-w-[70px] leading-tight">
+        {char.name.split(' ')[0]}
+      </div>
+      <div className="text-[9px] text-stone-500 text-center">{char.role}</div>
+    </div>
+  )
+}
+--- END OF FILE src/components/CourtDossier.tsx ---

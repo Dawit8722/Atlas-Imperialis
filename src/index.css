@@ -1,0 +1,145 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --font-cinzel: 'Cinzel', Georgia, serif;
+    --font-serif: 'Lora', Georgia, serif;
+    --font-sans: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+    --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+    --surface-bg: #0c0a09;
+    --surface-panel: #141210;
+    --border-hairline: rgba(255, 255, 255, 0.08);
+  }
+
+  body {
+    font-family: var(--font-sans);
+    background-color: var(--surface-bg);
+  }
+
+  button:focus-visible,
+  a:focus-visible,
+  input:focus-visible,
+  select:focus-visible,
+  textarea:focus-visible {
+    outline: 2px solid rgba(245, 158, 11, 0.75);
+    outline-offset: 2px;
+  }
+}
+
+.font-cinzel {
+  font-family: var(--font-cinzel);
+}
+
+.font-editorial {
+  font-family: var(--font-serif);
+}
+
+.font-mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+.glass-panel {
+  background: rgba(16, 14, 13, 0.94);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--border-hairline);
+}
+
+.glass-card {
+  background: rgba(24, 21, 19, 0.65);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+/* WeasyPrint-compatible A4 Compendium Print Stylesheet */
+@media print {
+  @page {
+    size: A4;
+    margin: 2cm;
+  }
+
+  /* Hide app navigation, control panels, canvas and inspectors when printing compendium */
+  .no-print, header, nav, aside, .map-container, .timeline-bar, .ui-panel {
+    display: none !important;
+  }
+
+  body {
+    background: #ffffff !important;
+    color: #1a1a1a !important;
+    font-family: 'Georgia', serif !important;
+    line-height: 1.6 !important;
+  }
+
+  .print-only {
+    display: block !important;
+  }
+
+  .compendium-print-root {
+    display: block !important;
+    width: 100% !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+
+  h1.compendium-title {
+    text-align: center !important;
+    color: #2c3e50 !important;
+    font-size: 26pt !important;
+    margin-bottom: 1.5cm !important;
+    font-family: 'Georgia', serif !important;
+  }
+
+  .pdf-chapter {
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+    margin-bottom: 2em !important;
+    padding-bottom: 1.5em !important;
+    border-bottom: 1px solid #ccc !important;
+  }
+
+  .category-tag {
+    font-size: 0.8em !important;
+    text-transform: uppercase !important;
+    color: #7f8c8d !important;
+    letter-spacing: 0.05em !important;
+    display: block !important;
+    margin-bottom: 0.3em !important;
+  }
+
+  .pdf-chapter h2 {
+    color: #2c3e50 !important;
+    font-size: 16pt !important;
+    margin-top: 0.2em !important;
+    margin-bottom: 0.4em !important;
+  }
+
+  .pdf-chapter p.summary {
+    font-style: italic !important;
+    color: #4a5568 !important;
+    margin-bottom: 0.8em !important;
+  }
+}
+
+/* Custom Scrollbar for parchment & dark panels */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.2);
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(180, 160, 120, 0.3);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(180, 160, 120, 0.5);
+}

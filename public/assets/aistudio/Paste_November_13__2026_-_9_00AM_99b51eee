@@ -1,0 +1,603 @@
+Here is Stage 2: Socioeconomic Population Strata (Pop Classes, Real Wages &
+Living Standards).
+
+What this fundamentally changes
+
+  - Before: Population was just a flat number (2500 people). They didn't work
+    jobs, didn't earn wages, and had no expenses.
+  - Now: Every settlement’s population is broken down into 5 socioeconomic
+    classes:
+    1.  Serfs & Peasants (Farming, forestry, and mining labor)
+    2.  Burghers & Artisans (Workshop manufacturing, forging, weaving)
+    3.  Merchant Guilds (Trade caravans, market distribution, banking)
+    4.  Clergy (Temples, parish relief, literacy)
+    5.  Nobility (Landlords, estate owners, military retinues)
+  - Real Wages & The Cost of Living Basket:
+      - Each class has a monthly consumption basket (Peasants need Grain, Ale,
+        Salt, and Timber; Nobles demand Wine, Silk, and Weapons).
+      - If food or firewood prices surge, the Cost of Living rises.
+      - We calculate each class’s Standard of Living (SoL):
+        \text{Standard of Living} = \frac{\text{Average Monthly Income}}{\text{Cost of Living Basket}}
+  - Organic Unrest & Revolts:
+      - When SoL drops below subsistence (<0.80), smallfolk cannot afford bread.
+        Unrest climbs organically.
+      - If unrest crosses 75\%, peasants refuse to pay taxes and stage bread
+        riots—not from a random scripted event, but because real wages collapsed
+        below survival!
+
+Step 1: Update mapper/src/types/economy.ts
+
+1.  Open mapper/src/types/economy.ts.
+2.  Scroll to the very bottom and paste this definition:
+
+// ============================================================================
+// SOCIOECONOMIC STRATA & STANDARD OF LIVING
+// ============================================================================
+
+export type SocialStratum = 'Peasants' | 'Artisans' | 'Merchants' | 'Clergy' | 'Nobility';
+
+export type StratumSentiment = 'Thriving' | 'Content' | 'Struggling' | 'Rebellious';
+
+export interface PopulationStratumData {
+  stratum: SocialStratum;
+  count: number;             // Actual population headcount
+  averageIncome: number;     // Monthly income earned from labor/profit
+  livingCost: number;        // Cost of their required goods basket
+  standardOfLiving: number;  // Ratio: averageIncome / livingCost
+  unrest: number;            // 0 to 100
+  sentiment: StratumSentiment;
+}
+
+3.  Save the file (Ctrl + S or Cmd + S).
+
+Step 2: Add Strata to Burg in mapper/src/types/world.ts
+
+1.  Open mapper/src/types/world.ts.
+2.  Press Ctrl + F (or Cmd + F) and search for:
+    export interface Burg {
+3.  Inside Burg, right after areaKm2?: number;, add these three fields:
+
+  // Socioeconomic Classes & Living Standards
+  strata?: Record<string, any>;
+  standardOfLiving?: number;
+  unrest?: number;
+
+4.  Save the file.
+
+Step 3: Implement the Strata & Wage Simulation in economyEngine.ts
+
+Now we give economyEngine.ts the engine to calculate real wages, living costs,
+and unrest every month.
+
+1.  Open mapper/src/engine/economyEngine.ts.
+
+2.  At the top of economyEngine.ts, update the imports from ../types/economy to
+    include the new types: Find:
+
+    import {
+      CommodityType,
+
+    Make sure it includes SocialStratum, PopulationStratumData, and
+    StratumSentiment:
+
+    import {
+      CommodityType,
+      CommodityCategory,
+      CommodityGeography,
+      CommodityPurpose,
+      CommodityAccessibility,
+      CommodityDurability,
+      CommodityMetadata,
+      CommodityMarket,
+      BurgMarket,
+      BankInstitution,
+      BankLoan,
+      FiscalProfile,
+      EconomyState,
+      FoodSecurityState,
+      RealmCurrency,
+      BarterTransaction,
+      BarterRatio,
+      SocialStratum,
+      PopulationStratumData,
+      StratumSentiment,
+    } from '../types/economy';
+
+3.  Scroll to the bottom of mapper/src/engine/economyEngine.ts and paste this
+    complete Strata Engine function:
+
+// ============================================================================
+// POPULATION STRATA, REAL WAGES & LIVING STANDARDS SIMULATION
+// ============================================================================
+
+export function updateSocioeconomicStrata(
+  burg: Burg,
+  bMarket: BurgMarket,
+  world: WorldState
+): void {
+  const totalPop = burg.population || 2500;
+  const dev = burg.developmentLevel || 30;
+
+  // 1. Demographics breakdown based on settlement classification
+  const ratios: Record<SocialStratum, number> =
+    burg.type === 'Farming Village'
+      ? { Peasants: 0.85, Artisans: 0.08, Merchants: 0.03, Clergy: 0.03, Nobility: 0.01 }
+      : burg.type === 'Trade Port' || burg.type === 'Fishing Port'
+      ? { Peasants: 0.48, Artisans: 0.22, Merchants: 0.20, Clergy: 0.06, Nobility: 0.04 }
+      : burg.type === 'Capital Citadel'
+      ? { Peasants: 0.36, Artisans: 0.28, Merchants: 0.16, Clergy: 0.10, Nobility: 0.10 }
+      : burg.type === 'Border Fortress' || burg.type === 'Mountain Hamlet'
+      ? { Peasants: 0.52, Artisans: 0.24, Merchants: 0.06, Clergy: 0.06, Nobility: 0.12 }
+      : /* Market Town / Metropolis */
+        { Peasants: 0.55, Artisans: 0.25, Merchants: 0.12, Clergy: 0.05, Nobility: 0.03 };
+
+  // 2. Pricing lookups for living baskets
+  const getPrice = (comm: CommodityType, fallback: number) =>
+    bMarket.markets[comm]?.currentPrice || fallback;
+
+  const grainPrice = getPrice('Grain', 10);
+  const saltPrice = getPrice('Salt', 22);
+  const alePrice = getPrice('Ale & Beer', 14);
+  const timberPrice = getPrice('Timber', 14);
+  const woolPrice = getPrice('Wool', 20);
+  const leatherPrice = getPrice('Tanned Leather', 24);
+  const clothPrice = getPrice('Fine Woolen Cloth', 44);
+  const winePrice = getPrice('Wine', 32);
+  const silkPrice = getPrice('Silk', 90);
+
+  // 3. Basket costs per class
+  const peasantBasketCost = (grainPrice * 0.4) + (saltPrice * 0.05) + (alePrice * 0.15) + (timberPrice * 0.15) + (woolPrice * 0.1);
+  const artisanBasketCost = (grainPrice * 0.3) + (alePrice * 0.2) + (leatherPrice * 0.15) + (timberPrice * 0.15) + (clothPrice * 0.1);
+  const merchantBasketCost = (grainPrice * 0.2) + (winePrice * 0.25) + (clothPrice * 0.2) + (silkPrice * 0.1) + (timberPrice * 0.15);
+  const clergyBasketCost = (grainPrice * 0.25) + (winePrice * 0.25) + (saltPrice * 0.1) + (timberPrice * 0.2);
+  const nobilityBasketCost = (winePrice * 0.4) + (silkPrice * 0.3) + (clothPrice * 0.2) + (getPrice('Crossbow Bolts', 38) * 0.1);
+
+  // 4. Incomes earned from real productivity
+  const baseAgriWage = Math.max(3.0, (grainPrice * 0.35 + alePrice * 0.15) * (dev / 25));
+  const baseArtisanWage = Math.max(5.0, (clothPrice * 0.15 + leatherPrice * 0.15 + timberPrice * 0.1) * (dev / 22));
+  const baseMerchantIncome = Math.max(8.0, (bMarket.totalMarketVolume / Math.max(1, totalPop * 0.001)) * 0.25);
+  const baseClergyIncome = Math.max(4.0, (baseAgriWage * 0.3 + baseMerchantIncome * 0.2));
+  const baseNobilityIncome = Math.max(14.0, ((burg.economicLedger?.totalRevenue || 40) / Math.max(1, totalPop * 0.0005)));
+
+  const strataData: Record<SocialStratum, PopulationStratumData> = {
+    Peasants: createStratum('Peasants', Math.round(totalPop * ratios.Peasants), baseAgriWage, peasantBasketCost, burg),
+    Artisans: createStratum('Artisans', Math.round(totalPop * ratios.Artisans), baseArtisanWage, artisanBasketCost, burg),
+    Merchants: createStratum('Merchants', Math.round(totalPop * ratios.Merchants), baseMerchantIncome, merchantBasketCost, burg),
+    Clergy: createStratum('Clergy', Math.round(totalPop * ratios.Clergy), baseClergyIncome, clergyBasketCost, burg),
+    Nobility: createStratum('Nobility', Math.round(totalPop * ratios.Nobility), baseNobilityIncome, nobilityBasketCost, burg),
+  };
+
+  burg.strata = strataData;
+
+  // Average Standard of Living across all smallfolk (weighted by population)
+  const weightedSoL =
+    (strataData.Peasants.standardOfLiving * strataData.Peasants.count +
+      strataData.Artisans.standardOfLiving * strataData.Artisans.count +
+      strataData.Merchants.standardOfLiving * strataData.Merchants.count +
+      strataData.Clergy.standardOfLiving * strataData.Clergy.count +
+      strataData.Nobility.standardOfLiving * strataData.Nobility.count) / totalPop;
+
+  burg.standardOfLiving = Math.round(weightedSoL * 100) / 100;
+
+  // Average Unrest
+  const weightedUnrest =
+    (strataData.Peasants.unrest * strataData.Peasants.count +
+      strataData.Artisans.unrest * strataData.Artisans.count +
+      strataData.Merchants.unrest * strataData.Merchants.count) /
+    (strataData.Peasants.count + strataData.Artisans.count + strataData.Merchants.count);
+
+  burg.unrest = Math.round(weightedUnrest);
+
+  // ORGANIC BREAD RIOT TRIGGER:
+  // If peasants are starving/impoverished and unrest crosses 75
+  if (strataData.Peasants.unrest >= 75 && Math.random() < 0.25) {
+    burg.developmentLevel = Math.max(5, (burg.developmentLevel || 30) - 2);
+    if (!world.history) world.history = [];
+    world.history.unshift({
+      id: generateUniqueId('hist_unrest_riot'),
+      year: world.currentYear,
+      title: `Bread Riot: Smallfolk Uprising in ${burg.name}`,
+      category: 'Great Cataclysm',
+      description: `Spurred by soaring grain costs (${grainPrice}g) and a collapsing standard of living (SoL: ${strataData.Peasants.standardOfLiving.toFixed(2)}), ${strataData.Peasants.count.toLocaleString()} smallfolk took up scythes and ransacked municipal granaries!`,
+      realmId: burg.stateId,
+      primaryActorId: burg.ownerId,
+    });
+  }
+}
+
+function createStratum(
+  stratum: SocialStratum,
+  count: number,
+  income: number,
+  livingCost: number,
+  burg: Burg
+): PopulationStratumData {
+  const sol = Math.round((income / Math.max(0.5, livingCost)) * 100) / 100;
+  
+  let sentiment: StratumSentiment = 'Content';
+  let unrestDelta = 0;
+
+  if (sol >= 1.35) {
+    sentiment = 'Thriving';
+    unrestDelta = -8;
+  } else if (sol >= 0.95) {
+    sentiment = 'Content';
+    unrestDelta = -3;
+  } else if (sol >= 0.70) {
+    sentiment = 'Struggling';
+    unrestDelta = +6;
+  } else {
+    sentiment = 'Rebellious';
+    unrestDelta = +14;
+  }
+
+  const existingUnrest = burg.strata?.[stratum]?.unrest ?? 10;
+  const unrest = Math.max(0, Math.min(100, existingUnrest + unrestDelta));
+
+  return {
+    stratum,
+    count,
+    averageIncome: Math.round(income * 10) / 10,
+    livingCost: Math.round(livingCost * 10) / 10,
+    standardOfLiving: sol,
+    unrest,
+    sentiment,
+  };
+}
+
+4.  Now wire this into processDebtLeverageAndDefaults. In economyEngine.ts,
+    search for:
+    bMarket.totalMarketVolume = Math.round(monthlyTurnover);
+    updateBurgFoodSecurity(bMarket, worldBurg);
+5.  Right below updateBurgFoodSecurity(bMarket, worldBurg);, add this line:
+    if (worldBurg) {
+      updateSocioeconomicStrata(worldBurg, bMarket, world);
+    }
+6.  Save the file.
+
+Step 4: Add the Social Classes View in FlowEconomyPanels.tsx
+
+Now we give you a tab in the Bourse & Royal Treasury panel so you can inspect
+your peasants, artisans, merchants, and nobility.
+
+1.  Open mapper/src/components/FlowEconomyPanels.tsx.
+2.  Select everything (Ctrl + A or Cmd + A) and replace it with this complete,
+    updated version:
+
+import React, { useState } from 'react';
+import { 
+  Coins, 
+  TrendingDown, 
+  TrendingUp, 
+  Landmark, 
+  Scale, 
+  Wheat,
+  Pickaxe,
+  Gem,
+  AlertTriangle,
+  Users,
+  HeartHandshake,
+  ShieldAlert
+} from 'lucide-react';
+import { WorldState, Burg } from '../types/world';
+import { CommodityType, SocialStratum } from '../types/economy';
+import { debaseCurrency, takeBankLoan } from '../engine/economyEngine';
+import { cloneWorldState } from '../utils/cloneWorldState';
+
+interface FlowEconomyPanelsProps {
+  world: WorldState;
+  selectedBurg?: Burg;
+  onUpdateWorld?: (newWorld: WorldState) => void;
+}
+
+export function FlowEconomyPanels({ world, selectedBurg, onUpdateWorld }: FlowEconomyPanelsProps) {
+  const [activeSubTab, setActiveSubTab] = useState<'treasury' | 'market' | 'strata'>('treasury');
+
+  const activeCharId = world.monarchId || world.characters?.[0]?.id;
+  const activeChar = world.characters?.find(c => c.id === activeCharId);
+  const fiscalProfile = world.economy?.fiscalProfiles?.[activeCharId || ''];
+
+  const executeAction = (actionFn: (w: WorldState) => { success: boolean; message: string }) => {
+    if (!onUpdateWorld) return;
+    const newWorld = cloneWorldState(world);
+    const result = actionFn(newWorld);
+    if (result.success) {
+      onUpdateWorld(newWorld);
+    } else {
+      alert(result.message);
+    }
+  };
+
+  return (
+    <div className="flex h-full flex-col overflow-y-auto bg-stone-900/95 text-stone-200">
+      
+      {/* ================= HEADER & SUB-TABS ================= */}
+      <div className="border-b border-stone-800 bg-stone-950/50 p-4 pb-0">
+        <h2 className="mb-4 flex items-center gap-2 font-serif text-lg font-bold text-amber-200">
+          <Scale className="h-5 w-5" /> Bourse & Living Economy
+        </h2>
+        <div className="flex gap-4 border-b border-stone-800 overflow-x-auto no-scrollbar">
+          <button
+            onClick={() => setActiveSubTab('treasury')}
+            className={`pb-2 text-xs font-bold uppercase tracking-wider transition-colors whitespace-nowrap cursor-pointer ${
+              activeSubTab === 'treasury' ? 'border-b-2 border-amber-500 text-amber-400' : 'text-stone-500 hover:text-stone-300'
+            }`}
+          >
+            Crown Ledger
+          </button>
+          <button
+            onClick={() => setActiveSubTab('market')}
+            className={`pb-2 text-xs font-bold uppercase tracking-wider transition-colors whitespace-nowrap cursor-pointer ${
+              activeSubTab === 'market' ? 'border-b-2 border-amber-500 text-amber-400' : 'text-stone-500 hover:text-stone-300'
+            }`}
+          >
+            Local Market
+          </button>
+          <button
+            onClick={() => setActiveSubTab('strata')}
+            className={`pb-2 text-xs font-bold uppercase tracking-wider transition-colors whitespace-nowrap cursor-pointer ${
+              activeSubTab === 'strata' ? 'border-b-2 border-amber-500 text-amber-400' : 'text-stone-500 hover:text-stone-300'
+            }`}
+          >
+            Social Classes & Wages
+          </button>
+        </div>
+      </div>
+
+      <div className="p-4 space-y-6">
+        
+        {/* ================= TAB 1: CROWN LEDGER & BANKING ================= */}
+        {activeSubTab === 'treasury' && fiscalProfile && activeChar && (
+          <>
+            <div className="rounded-xl border border-stone-800 bg-stone-950/60 p-4 shadow-lg">
+              <div className="mb-4 flex items-center justify-between">
+                <span className="text-xs font-bold uppercase text-stone-500">Royal Treasury</span>
+                <span className="font-mono text-2xl font-bold text-amber-300">
+                  {Math.floor(activeChar.treasury || 0)} <span className="text-sm text-stone-500">g</span>
+                </span>
+              </div>
+              
+              <div className="grid grid-cols-2 gap-4 border-t border-stone-800 pt-4">
+                <div>
+                  <div className="mb-2 text-[10px] font-bold uppercase text-emerald-500/80">Monthly Revenue (+{fiscalProfile.totalRevenue})</div>
+                  <div className="space-y-1 text-xs text-stone-400">
+                    <div className="flex justify-between"><span>Demesne</span> <span className="font-mono text-emerald-400">+{fiscalProfile.demesneIncome}</span></div>
+                    <div className="flex justify-between"><span>Vassals</span> <span className="font-mono text-emerald-400">+{fiscalProfile.vassalTribute}</span></div>
+                    <div className="flex justify-between"><span>Tariffs</span> <span className="font-mono text-emerald-400">+{fiscalProfile.tariffIncome}</span></div>
+                  </div>
+                </div>
+                <div>
+                  <div className="mb-2 text-[10px] font-bold uppercase text-red-500/80">Monthly Expenses (-{fiscalProfile.totalExpenses})</div>
+                  <div className="space-y-1 text-xs text-stone-400">
+                    <div className="flex justify-between"><span>Army Upkeep</span> <span className="font-mono text-red-400">-{fiscalProfile.armyUpkeep}</span></div>
+                    <div className="flex justify-between"><span>Debt Service</span> <span className="font-mono text-red-400">-{fiscalProfile.debtServicing}</span></div>
+                    <div className="flex justify-between"><span>Court Splendor</span> <span className="font-mono text-red-400">-{fiscalProfile.courtSplendorCost}</span></div>
+                  </div>
+                </div>
+              </div>
+
+              <div className={`mt-4 rounded-lg p-2 text-center text-sm font-bold ${fiscalProfile.netMonthlyCashflow >= 0 ? 'bg-emerald-950/30 text-emerald-400' : 'bg-red-950/30 text-red-400'}`}>
+                Net Cashflow: {fiscalProfile.netMonthlyCashflow > 0 ? '+' : ''}{fiscalProfile.netMonthlyCashflow} / mo
+              </div>
+            </div>
+
+            <div className="rounded-xl border border-stone-800 bg-stone-950/60 p-4 shadow-lg">
+              <h3 className="mb-3 text-xs font-bold uppercase tracking-wider text-stone-500 flex items-center gap-1.5">
+                <Coins className="h-4 w-4" /> Monetary Policy & Purity
+              </h3>
+              
+              <div className="mb-4 flex items-center justify-between text-sm">
+                <span>Coin Purity: <span className="font-mono text-amber-200">{((fiscalProfile.coinPurity ?? 1.0) * 100).toFixed(0)}%</span></span>
+                <span>Inflation: <span className="font-mono text-red-400">{(((fiscalProfile.inflationFactor || 1.0) - 1) * 100).toFixed(0)}%</span></span>
+              </div>
+              
+              <button 
+                onClick={() => executeAction((w) => debaseCurrency(w, activeChar.realmId || '', 0.10))}
+                className="w-full rounded-md bg-stone-800 py-2 text-xs font-bold text-stone-300 transition-colors hover:bg-red-900/80 hover:text-red-100 cursor-pointer"
+                disabled={fiscalProfile.coinPurity <= 0.35}
+              >
+                Melt & Debase Coinage (Get Emergency Gold)
+              </button>
+            </div>
+
+            <div className="rounded-xl border border-stone-800 bg-stone-950/60 p-4 shadow-lg">
+              <h3 className="mb-3 text-xs font-bold uppercase tracking-wider text-stone-500 flex items-center gap-1.5">
+                <Landmark className="h-4 w-4" /> Patrician Creditors
+              </h3>
+              
+              <div className="space-y-3">
+                {world.economy?.bankInstitutions.map(bank => (
+                  <div key={bank.id} className="rounded-lg border border-stone-700 bg-stone-900 p-3">
+                    <div className="mb-1 flex items-center justify-between">
+                      <span className="font-serif text-sm font-bold text-stone-200">{bank.name}</span>
+                      <span className="text-xs font-mono text-amber-500/80">{(bank.baseInterestRate * 100).toFixed(0)}% APR</span>
+                    </div>
+                    <div className="mb-3 text-[10px] text-stone-500">Managed by {bank.patricianName}</div>
+                    
+                    <button 
+                      onClick={() => executeAction((w) => takeBankLoan(w, bank.id, activeChar.id, 250))}
+                      disabled={!bank.isSolvent || bank.treasury < 250}
+                      className="w-full rounded bg-stone-800 py-1.5 text-xs font-semibold text-amber-400 transition-colors hover:bg-stone-700 disabled:opacity-50 cursor-pointer"
+                    >
+                      {bank.isSolvent ? 'Borrow 250g (36 Months)' : 'Bank Insolvent'}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </>
+        )}
+
+        {/* ================= TAB 2: LOCAL COMMODITY MARKET ================= */}
+        {activeSubTab === 'market' && (
+          selectedBurg ? (
+            <div className="space-y-4">
+              <div className="rounded-xl border border-stone-800 bg-stone-950/60 p-4 text-center">
+                <h3 className="font-serif text-lg font-bold text-amber-200">{selectedBurg.name} Bourse</h3>
+                <p className="text-xs text-stone-400">Monthly Trade Volume: <span className="font-mono text-amber-400">{world.economy?.burgMarkets?.[selectedBurg.id]?.totalMarketVolume || 0}g</span></p>
+              </div>
+
+              <div className="grid gap-2">
+                {Object.values(world.economy?.burgMarkets?.[selectedBurg.id]?.markets || {}).map(market => {
+                  const isFood = market.commodity === 'Grain' || market.commodity === 'Livestock';
+                  const isBullion = market.commodity === 'Silver' || market.commodity === 'Gold';
+                  const isBottlenecked = market.throughputRate !== undefined && market.throughputRate < 0.8;
+                  
+                  return (
+                    <div key={market.commodity} className="flex items-center justify-between rounded-lg border border-stone-800 bg-stone-900/40 p-2.5 hover:bg-stone-800/60">
+                      <div className="flex items-center gap-2">
+                        {isFood ? <Wheat className="h-4 w-4 text-emerald-500" /> : isBullion ? <Gem className="h-4 w-4 text-amber-300" /> : <Pickaxe className="h-4 w-4 text-stone-400" />}
+                        <div>
+                          <div className="text-xs font-bold text-stone-200 flex items-center gap-1.5">
+                            <span>{market.commodity}</span>
+                            {isBottlenecked && (
+                              <span className="text-[9px] px-1.5 py-0.2 rounded bg-amber-950 border border-amber-600/60 text-amber-300 font-mono">
+                                ⚠️ {(market.throughputRate! * 100).toFixed(0)}% Capacity ({market.bottleneckInput ? `Needs ${market.bottleneckInput}` : 'Bottleneck'})
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-[10px] text-stone-500 font-mono">Stock: {Math.floor(market.stockpile)} · Prod: {market.monthlyProduction}/mo</div>
+                        </div>
+                      </div>
+                      
+                      <div className="text-right">
+                        <div className="font-mono text-sm font-bold text-amber-100 flex items-center gap-1 justify-end">
+                          {market.currentPrice.toFixed(1)}g
+                          {market.currentPrice > (market.lastMonthPrice || market.basePrice) 
+                            ? <TrendingUp className="h-3 w-3 text-red-400" /> 
+                            : <TrendingDown className="h-3 w-3 text-emerald-400" />}
+                        </div>
+                        <div className="text-[10px] text-stone-500 font-mono">Base: {market.basePrice.toFixed(1)}</div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ) : (
+            <div className="flex h-32 items-center justify-center rounded-xl border border-stone-800 border-dashed bg-stone-950/30 p-6 text-center text-sm text-stone-500">
+              Select a settlement on the map to view its commodity marketplace.
+            </div>
+          )
+        )}
+
+        {/* ================= TAB 3: SOCIAL CLASSES, REAL WAGES & UNREST ================= */}
+        {activeSubTab === 'strata' && (
+          selectedBurg ? (
+            <div className="space-y-4">
+              <div className="rounded-xl border border-stone-800 bg-stone-950/60 p-4">
+                <div className="flex items-center justify-between mb-2">
+                  <h3 className="font-serif text-base font-bold text-amber-200 flex items-center gap-2">
+                    <Users className="h-4 w-4 text-amber-400" />
+                    <span>{selectedBurg.name} Demographics</span>
+                  </h3>
+                  <div className="text-right">
+                    <span className="text-[10px] uppercase font-bold text-stone-500 block">Overall SoL</span>
+                    <span className={`font-mono text-sm font-bold ${
+                      (selectedBurg.standardOfLiving || 1.0) >= 1.25 ? 'text-emerald-400' :
+                      (selectedBurg.standardOfLiving || 1.0) >= 0.90 ? 'text-amber-300' : 'text-red-400'
+                    }`}>
+                      {(selectedBurg.standardOfLiving || 1.0).toFixed(2)}x
+                    </span>
+                  </div>
+                </div>
+
+                <div className="w-full bg-stone-950 h-2 rounded-full overflow-hidden border border-white/5">
+                  <div
+                    className={`h-full transition-all ${
+                      (selectedBurg.unrest || 0) > 60 ? 'bg-red-500' : (selectedBurg.unrest || 0) > 30 ? 'bg-amber-500' : 'bg-emerald-500'
+                    }`}
+                    style={{ width: `${Math.min(100, selectedBurg.unrest || 10)}%` }}
+                  />
+                </div>
+                <div className="flex justify-between items-center text-[10px] font-mono text-stone-400 mt-1">
+                  <span>Municipal Unrest: {selectedBurg.unrest || 10} / 100</span>
+                  <span>{(selectedBurg.population || 2500).toLocaleString()} Total Citizens</span>
+                </div>
+              </div>
+
+              {/* Individual Social Classes Cards */}
+              <div className="space-y-2">
+                {Object.entries((selectedBurg.strata || {}) as Record<SocialStratum, any>).map(([className, data]) => {
+                  const sentimentColor =
+                    data.sentiment === 'Thriving' ? 'text-emerald-300 bg-emerald-950/60 border-emerald-700/60' :
+                    data.sentiment === 'Content' ? 'text-amber-200 bg-amber-950/60 border-amber-700/60' :
+                    data.sentiment === 'Struggling' ? 'text-orange-300 bg-orange-950/60 border-orange-700/60' :
+                    'text-red-300 bg-red-950/80 border-red-700 font-bold animate-pulse';
+
+                  return (
+                    <div key={className} className="p-3 rounded-xl border border-stone-800 bg-stone-950/60 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <div className="font-bold text-xs text-stone-200 flex items-center gap-1.5">
+                            <span>{className === 'Peasants' ? '🌾' : className === 'Artisans' ? '⚒️' : className === 'Merchants' ? '⚖️' : className === 'Clergy' ? '⛪' : '👑'}</span>
+                            <span>{className}</span>
+                            <span className="text-[10px] text-stone-500 font-mono">({data.count.toLocaleString()} souls)</span>
+                          </div>
+                        </div>
+                        <span className={`px-2 py-0.5 rounded text-[10px] font-mono border ${sentimentColor}`}>
+                          {data.sentiment}
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-3 gap-2 text-[10px] font-mono pt-1 border-t border-stone-800/80">
+                        <div className="p-1.5 rounded bg-black/40 border border-white/5">
+                          <div className="text-stone-500">MONTHLY WAGE</div>
+                          <div className="font-bold text-emerald-400 text-xs mt-0.5">+{data.averageIncome}g</div>
+                        </div>
+                        <div className="p-1.5 rounded bg-black/40 border border-white/5">
+                          <div className="text-stone-500">LIVING BASKET</div>
+                          <div className="font-bold text-rose-400 text-xs mt-0.5">-{data.livingCost}g</div>
+                        </div>
+                        <div className="p-1.5 rounded bg-black/40 border border-white/5">
+                          <div className="text-stone-500">REAL SOL</div>
+                          <div className={`font-bold text-xs mt-0.5 ${data.standardOfLiving >= 1.0 ? 'text-amber-300' : 'text-red-400'}`}>
+                            {data.standardOfLiving.toFixed(2)}x
+                          </div>
+                        </div>
+                      </div>
+
+                      {data.unrest > 50 && (
+                        <div className="p-1.5 rounded bg-red-950/40 border border-red-900/60 text-[10px] text-red-300 flex items-center gap-1.5">
+                          <ShieldAlert className="w-3.5 h-3.5 text-red-400 shrink-0" />
+                          <span>High Unrest ({data.unrest}%)! At risk of strikes or rioting.</span>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ) : (
+            <div className="flex h-32 items-center justify-center rounded-xl border border-stone-800 border-dashed bg-stone-950/30 p-6 text-center text-sm text-stone-500">
+              Select a settlement on the map to inspect its social classes, wages, and living standards.
+            </div>
+          )
+        )}
+
+      </div>
+    </div>
+  );
+}
+
+3.  Save the file.
+
+Step 4: Test Your New Social Strata & Living Standards!
+
+1.  Open your browser at http://localhost:3000.
+2.  Click on the "Bourse & Trade" tab in the main navigation.
+3.  Click on any city or town on the map (like Silvervale).
+4.  Click on the new "Social Classes & Wages" sub-tab:
+      - You will see your Peasants, Artisans, Merchants, Clergy, and Nobility.
+      - You will see their exact headcount, their real monthly wage, the cost of
+        their food/warmth basket, and their real Standard of Living.
+5.  Click "+1y" to advance time:
+      - If grain harvests are plentiful, peasant wages cover food, Standard of
+        Living rises, and their sentiment becomes "Content" or "Thriving".
+      - If food prices soar or inflation spikes, you will watch their living
+        standards degrade into "Struggling" or "Rebellious", organically
+        triggering smallfolk unrest!
+
+Once you test this, reply with "Stage 2 done", and we will proceed to Stage 3:
+The Closed Monetary Circuit (where gold is no longer generated out of thin air,
+but circulates realistically between lord, soldier, and peasant)!

@@ -1,0 +1,6 @@
+{
+  "name": "RealmSmith: Procedural World Builder & Grand Strategy Chronicle",
+  "description": "Procedural fantasy cartography studio and grand strategy simulator with interpersonal dynastic politics, living chronicles, economic trade networks, and A4 Realm Compendium lore book export.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

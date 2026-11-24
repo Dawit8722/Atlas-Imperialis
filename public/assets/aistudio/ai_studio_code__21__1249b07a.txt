@@ -1,0 +1,481 @@
+--- START OF FILE src/components/CK3EventModal.tsx ---
+import React, { useState, useMemo } from 'react';
+import { Character, WorldState, HistoricalEvent } from '../types/world';
+import { computeCharacterStats, CK3_TRAITS } from '../engine/fantasyTables';
+import { PRNG } from '../utils/proceduralNoise';
+import {
+  Skull,
+  Flame,
+  Heart,
+  Crown,
+  Eye,
+  Shield,
+  Zap,
+  Sparkles,
+  X,
+  Swords,
+  Scroll,
+} from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
+
+export interface EventOption {
+  label: string;
+  flavor: string;
+  traitRequirements?: string[];
+  consequencesSummary: string[];
+  execute: (char: Character, world: WorldState) => { outcomeText: string; updatedWorld: WorldState };
+}
+
+export interface CK3Event {
+  id: string;
+  title: string;
+  category: 'Intrigue' | 'Warfare' | 'Romance' | 'Faith' | 'Mental Break' | 'Dynasty';
+  illustration: string;
+  body: string;
+  options: EventOption[];
+}
+
+interface CK3EventModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  character: Character;
+  world: WorldState;
+  onApplyEventOutcome: (outcomeText: string, updatedWorld: WorldState) => void;
+}
+
+export const CK3EventModal: React.FC<CK3EventModalProps> = ({
+  isOpen,
+  onClose,
+  character,
+  world,
+  onApplyEventOutcome,
+}) => {
+  const [selectedOptionIndex, setSelectedOptionIndex] = useState<number | null>(null);
+
+  const stats = useMemo(() => computeCharacterStats(character), [character]);
+  const realm = useMemo(() => world.realms.find((r) => r.id === character.realmId) || world.realms[0], [world, character]);
+  const rival = useMemo(() => world.characters.find((c) => c.id === character.rivalId), [world, character]);
+  const spouse = useMemo(() => world.characters.find((c) => c.id === character.spouseId), [world, character]);
+  const spymaster = useMemo(() => world.characters.find((c) => c.realmId === realm.id && c.role === 'Spymaster'), [world, realm]);
+  const champion = useMemo(() => world.characters.find((c) => c.realmId === realm.id && c.role === 'Court Champion'), [world, realm]);
+
+  const event: CK3Event = useMemo(() => {
+    const prng = new PRNG(`${character.id}_${character.stress}_${world.currentYear}`);
+    const traits = new Set([...character.personalityTraits.map((t) => t.toLowerCase()), ...(character.lifestyleTraits || []).map((t) => t.toLowerCase())]);
+
+    if (character.stress > 85) {
+      return {
+        id: 'mental_break_event',
+        title: 'Mental Break: The Burden of Feudal Rule',
+        category: 'Mental Break',
+        illustration: '⚡',
+        body: `
+The relentless demands of governance, whispered conspiracies behind velvet hangings, and the dread of betrayal have shattered ${character.name}'s composure.
+Tension throbs behind the temples like a siege battering ram against oak gates. The high council demands swift decisions, but all the titles, banners, and oaths feel like leaden chains.
+A coping mechanism must be embraced before sanity completely dissolves.
+        `.trim(),
+        options: [
+          {
+            label: 'Drown the turmoil in spiced vintage and sweet cellar barrels',
+            flavor: '"Just one more goblet before the dawn councils begin..."',
+            consequencesSummary: [
+              'Gain Drunkard trait',
+              '-90 Stress',
+              '-1 Diplomacy, -1 Stewardship',
+              'Court whispers of drunken melancholy',
+            ],
+            execute: (char, w) => {
+              const updated = JSON.parse(JSON.stringify(w)) as WorldState;
+              const targetChar = updated.characters.find((c) => c.id === char.id)!;
+              targetChar.stress = Math.max(0, targetChar.stress - 90);
+              if (!targetChar.lifestyleTraits.includes('Drunkard')) targetChar.lifestyleTraits.push('Drunkard');
+              targetChar.stressCopingMechanism = 'Drunkard';
+              const hist: HistoricalEvent = {
+                id: `hist_coping_${Date.now()}`,
+                year: updated.currentYear,
+                title: `${char.name} Embraced the Cask`,
+                category: 'Dynastic Drama',
+                description: `${char.name} took solace from extreme court stress within the royal wine cellars, gaining the Drunkard trait.`,
+                primaryActorId: char.id,
+                realmId: char.realmId,
+              };
+              updated.history.unshift(hist);
+              return { outcomeText: `${char.name} seeks solace in wine. Stress reduced by 90, gained Drunkard trait.`, updatedWorld: updated };
+            },
+          },
+          {
+            label: 'Bar the oak chamber doors and refuse all royal audiences',
+            flavor: '"Leave me in peace! Let the realm burn if it must, but grant me silence."',
+            consequencesSummary: [
+              'Gain Reclusive trait',
+              '-75 Stress',
+              '-2 Diplomacy, +1 Learning',
+              'Council governance penalties',
+            ],
+            execute: (char, w) => {
+              const updated = JSON.parse(JSON.stringify(w)) as WorldState;
+              const targetChar = updated.characters.find((c) => c.id === char.id)!;
+              targetChar.stress = Math.max(0, targetChar.stress - 75);
+              if (!targetChar.lifestyleTraits.includes('Reclusive')) targetChar.lifestyleTraits.push('Reclusive');
+              targetChar.stressCopingMechanism = 'Reclusive';
+              return { outcomeText: `${char.name} retreated into isolation. Gained Reclusive trait, relieved 75 Stress.`, updatedWorld: updated };
+            },
+          },
+          {
+            label: 'Channel the manic anxiety into relentless dawn blade drills',
+            flavor: '"Iron does not lie. Sweat and steel will purge this weakness."',
+            traitRequirements: ['Brave', 'Diligent', 'Skilled Tactician'],
+            consequencesSummary: [
+              'Gain Athletic trait',
+              '-80 Stress',
+              '+3 Prowess, +1 Martial',
+              'Admiration from the royal guards',
+            ],
+            execute: (char, w) => {
+              const updated = JSON.parse(JSON.stringify(w)) as WorldState;
+              const targetChar = updated.characters.find((c) => c.id === char.id)!;
+              targetChar.stress = Math.max(0, targetChar.stress - 80);
+              if (!targetChar.lifestyleTraits.includes('Athletic')) targetChar.lifestyleTraits.push('Athletic');
+              targetChar.stressCopingMechanism = 'Athletic';
+              targetChar.baseProwess = (targetChar.baseProwess || 8) + 3;
+              return { outcomeText: `${char.name} mastered inner panic through martial discipline! Gained Athletic trait and +3 Prowess.`, updatedWorld: updated };
+            },
+          },
+        ],
+      };
+    }
+
+    if (character.knownSecrets.length > 0 || traits.has('deceitful') || traits.has('paranoid') || character.role === 'Spymaster') {
+      const victim = rival || spymaster || world.characters.find((c) => c.realmId === realm.id && c.id !== character.id)!;
+      return {
+        id: 'whispers_in_the_gallery',
+        title: 'Whispers in the Stone Gallery',
+        category: 'Intrigue',
+        illustration: '🗡️',
+        body: `
+Late in the evening, a hooded courier delivers a cracked wax seal bearing the insignia of House ${victim.houseName}.
+Inside is a parchment detailing an illicit secret: ${victim.name} is deeply entangled in: "${victim.darkSecret}".
+In the cutthroat courts of ${realm.name}, knowledge is deadlier than poisoned steel. How will this leverage be wielded?
+        `.trim(),
+        options: [
+          {
+            label: 'Blackmail them for an unbreakable Strong Hook',
+            flavor: '"They shall dance to my tune upon the council, or face public ruin."',
+            traitRequirements: ['Ambitious', 'Deceitful', 'Elusive Shadow'],
+            consequencesSummary: [
+              `Gain Strong Hook on ${victim.name}`,
+              '+15 Dread',
+              `-40 Opinion with ${victim.name}`,
+              character.personalityTraits.includes('Honest') ? '+35 Stress (Honest violation)' : '-10 Stress',
+            ],
+            execute: (char, w) => {
+              const updated = JSON.parse(JSON.stringify(w)) as WorldState;
+              const cur = updated.characters.find((c) => c.id === char.id)!;
+              const vic = updated.characters.find((c) => c.id === victim.id)!;
+              cur.hooksHeld.push({
+                targetId: vic.id,
+                targetName: vic.name,
+                type: 'Strong',
+                reason: `Possesses proof that they: ${vic.darkSecret}`,
+              });
+              vic.hooksOnMe.push({
+                targetId: vic.id,
+                targetName: vic.name,
+                holderId: cur.id,
+                holderName: cur.name,
+                type: 'Strong',
+                reason: `Blackmailed over: ${vic.darkSecret}`,
+              });
+              cur.dread = Math.min(100, cur.dread + 15);
+              vic.opinions[cur.id] = (vic.opinions[cur.id] || 0) - 40;
+              return { outcomeText: `Extorted a Strong Hook over ${victim.name}! They are bound to obey your demands.`, updatedWorld: updated };
+            },
+          },
+          {
+            label: 'Expose the vile heresy to the High Priests and Crown Council',
+            flavor: '"The light of truth must scorch this festering corruption!"',
+            consequencesSummary: [
+              `Imprison or humiliate ${victim.name}`,
+              '+150 Piety, +100 Prestige',
+              `Permanent Arch-Rivalry with House ${victim.houseName}`,
+            ],
+            execute: (char, w) => {
+              const updated = JSON.parse(JSON.stringify(w)) as WorldState;
+              const cur = updated.characters.find((c) => c.id === char.id)!;
+              const vic = updated.characters.find((c) => c.id === victim.id)!;
+              cur.piety += 150;
+              cur.prestige += 100;
+              cur.rivalId = vic.id;
+              vic.rivalId = cur.id;
+              vic.opinions[cur.id] = -100;
+              const hist: HistoricalEvent = {
+                id: `hist_scandal_${Date.now()}`,
+                year: updated.currentYear,
+                title: `The Great Scandal of ${vic.name}`,
+                category: 'Dynastic Drama',
+                description: `${cur.name} publicly unmasked ${vic.name}'s secret heresy before the court, sparking a bitter blood feud.`,
+                primaryActorId: cur.id,
+                secondaryActorId: vic.id,
+                realmId: cur.realmId,
+              };
+              updated.history.unshift(hist);
+              return { outcomeText: `Exposed ${victim.name} before the High Priests! Gained +150 Piety and +100 Prestige.`, updatedWorld: updated };
+            },
+          },
+          {
+            label: 'Burn the parchment in the brazier and let sleeping dragons lie',
+            flavor: '"A sovereign’s honor does not feed on court scavenging."',
+            traitRequirements: ['Honest', 'Compassionate', 'Forgiving'],
+            consequencesSummary: [
+              `-30 Stress for honoring sworn virtues`,
+              `+30 Opinion with ${victim.name}`,
+              '+50 Piety for mercy',
+            ],
+            execute: (char, w) => {
+              const updated = JSON.parse(JSON.stringify(w)) as WorldState;
+              const cur = updated.characters.find((c) => c.id === char.id)!;
+              const vic = updated.characters.find((c) => c.id === victim.id)!;
+              cur.stress = Math.max(0, cur.stress - 30);
+              cur.piety += 50;
+              vic.opinions[cur.id] = (vic.opinions[cur.id] || 0) + 30;
+              return { outcomeText: `Consigned the parchment to ashes. Upheld feudal honor, relieved 30 Stress!`, updatedWorld: updated };
+            },
+          },
+        ],
+      };
+    }
+
+    const duelRival = rival || world.characters.find((c) => c.realmId !== realm.id && c.isAlive)!;
+    return {
+      id: 'tourney_trial_by_combat',
+      title: 'Challenge at the Grand Melee',
+      category: 'Warfare',
+      illustration: '⚔️',
+      body: `
+During the grand feast celebrating the solstice, heralds sound bronze trumpets across the arena.
+${duelRival.name} steps into the chalk circle, casting down an iron gauntlet before ${character.name}!
+They accuse House ${character.houseName} of craven boundary encroachments and demand satisfaction in a judicial trial by combat.
+The entire court of ${realm.name} leans forward from the wooden galleries in breathless silence.
+      `.trim(),
+      options: [
+        {
+          label: 'Accept the duel in person and enter the list with bare steel!',
+          flavor: '"My ancestors look down upon this ring. I shall answer with cold iron."',
+          traitRequirements: ['Brave', 'Wrathful', 'Legendary Blademaster'],
+          consequencesSummary: [
+            `Duel roll based on Prowess (${stats.prowess} vs ${duelRival.baseProwess || 12})`,
+            'Victory: +300 Prestige, +25 Dread, rival disgraced',
+            'Defeat: Risk Scarred or One-Eyed injury',
+          ],
+          execute: (char, w) => {
+            const updated = JSON.parse(JSON.stringify(w)) as WorldState;
+            const cur = updated.characters.find((c) => c.id === char.id)!;
+            const opp = updated.characters.find((c) => c.id === duelRival.id)!;
+            const myScore = (cur.baseProwess || 10) + prng.range(1, 12);
+            const oppScore = (opp.baseProwess || 10) + prng.range(1, 12);
+
+            if (myScore >= oppScore) {
+              cur.prestige += 300;
+              cur.dread = Math.min(100, cur.dread + 25);
+              if (!cur.personalityTraits.includes('Brave')) cur.personalityTraits.push('Brave');
+              const hist: HistoricalEvent = {
+                id: `hist_duel_${Date.now()}`,
+                year: updated.currentYear,
+                title: `${cur.name} Triumphs in Trial by Combat`,
+                category: 'War & Conquest',
+                description: `${cur.name} defeated ${opp.name} in a ferocious melee duel before the assembled court, winning immense renown.`,
+                primaryActorId: cur.id,
+                secondaryActorId: opp.id,
+                realmId: cur.realmId,
+              };
+              updated.history.unshift(hist);
+              return { outcomeText: `VICTORY! ${char.name} shattered the challenger's blade and triumphed! +300 Prestige, +25 Dread!`, updatedWorld: updated };
+            } else {
+              cur.stress += 40;
+              if (!cur.physicalHealthTraits.includes('Scarred')) cur.physicalHealthTraits.push('Scarred');
+              return { outcomeText: `A fierce clash! ${char.name} took a hard wound across the brow but held the field. Gained Scarred trait.`, updatedWorld: updated };
+            }
+          },
+        },
+        {
+          label: `Command Court Champion ${champion?.name || 'the Sworn Knight'} to fight for the Crown`,
+          flavor: '"A sovereign does not bicker with every barking hound in the field."',
+          consequencesSummary: [
+            `Court Champion Champion rolls prowess (${champion?.baseProwess || 18})`,
+            'Protects ruler from physical injury',
+            '+50 Prestige upon victory',
+          ],
+          execute: (char, w) => {
+            const updated = JSON.parse(JSON.stringify(w)) as WorldState;
+            const cur = updated.characters.find((c) => c.id === char.id)!;
+            cur.prestige += 120;
+            return { outcomeText: `The Court Champion entered the ring and drove the insolent challenger into the dust! Realm honor upheld.`, updatedWorld: updated };
+          },
+        },
+        {
+          label: 'Concede the point and offer compensation to preserve the peace',
+          flavor: '"Blood spilled over pride is silver wasted that could feed the poor."',
+          traitRequirements: ['Craven', 'Calm', 'Content'],
+          consequencesSummary: [
+            '-150 Prestige',
+            '-30 Stress for avoiding mortal peril',
+            '+20 Opinion with the challenger',
+          ],
+          execute: (char, w) => {
+            const updated = JSON.parse(JSON.stringify(w)) as WorldState;
+            const cur = updated.characters.find((c) => c.id === char.id)!;
+            cur.prestige = Math.max(0, cur.prestige - 150);
+            cur.stress = Math.max(0, cur.stress - 30);
+            return { outcomeText: `${char.name} chose diplomacy over slaughter. -150 Prestige, relieved 30 Stress.`, updatedWorld: updated };
+          },
+        },
+      ],
+    };
+  }, [character, realm, rival, spouse, spymaster, champion, stats, world]);
+
+  if (!isOpen) return null;
+
+  return (
+    <AnimatePresence>
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-md">
+        <motion.div
+          initial={{ scale: 0.95, opacity: 0 }}
+          animate={{ scale: 1, opacity: 1 }}
+          exit={{ scale: 0.95, opacity: 0 }}
+          transition={{ duration: 0.2 }}
+          className="relative w-full max-w-2xl bg-stone-950 border-2 border-amber-600/80 rounded-2xl shadow-2xl overflow-hidden flex flex-col font-serif text-stone-200"
+        >
+          <div className="h-2 bg-gradient-to-r from-amber-700 via-amber-400 to-amber-700 shadow-sm" />
+
+          <div className="p-5 border-b border-stone-800 bg-stone-900/90 flex items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <span className="w-12 h-12 rounded-xl bg-amber-950/80 border border-amber-500/70 flex items-center justify-center text-2xl shadow-inner shrink-0">
+                {event.illustration}
+              </span>
+              <div>
+                <div className="text-[10px] uppercase font-bold tracking-widest text-amber-500 font-sans">
+                  Crusader Kings Event · {event.category}
+                </div>
+                <h2 className="text-xl font-bold font-cinzel text-amber-100 leading-tight">
+                  {event.title}
+                </h2>
+              </div>
+            </div>
+            <button
+              onClick={onClose}
+              className="p-1.5 text-stone-400 hover:text-stone-100 hover:bg-stone-800 rounded-lg transition-colors cursor-pointer"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+
+          <div className="p-6 space-y-4 overflow-y-auto max-h-[60vh]">
+            <div className="flex items-center gap-3 p-3 bg-stone-900/80 border border-stone-800 rounded-xl font-sans text-xs">
+              <span
+                className="w-10 h-10 rounded-lg flex items-center justify-center text-xl shadow-md border border-stone-700 shrink-0"
+                style={{ backgroundColor: character.coatOfArms.bg, color: character.coatOfArms.fg }}
+              >
+                {character.coatOfArms.symbol}
+              </span>
+              <div className="flex-1 min-w-0">
+                <div className="font-bold text-amber-200 truncate">{character.name}</div>
+                <div className="text-[11px] text-stone-400 truncate">
+                  {character.title} · <span className="text-amber-400">{character.aiArchetype}</span>
+                </div>
+              </div>
+              <div className="flex items-center gap-2 font-mono text-[11px] shrink-0">
+                <span className="px-2 py-0.5 bg-stone-950 border border-stone-800 rounded text-amber-400">
+                  Prowess: {stats.prowess}
+                </span>
+                <span className="px-2 py-0.5 bg-stone-950 border border-stone-800 rounded text-red-400">
+                  Stress: {character.stress}/300
+                </span>
+              </div>
+            </div>
+
+            <div className="p-4 bg-stone-900/40 border border-stone-800/80 rounded-xl text-stone-300 text-sm leading-relaxed whitespace-pre-line italic">
+              "{event.body}"
+            </div>
+
+            <div className="space-y-2.5 pt-2">
+              <div className="text-[11px] uppercase tracking-wider font-bold text-amber-500 font-sans">
+                Choose an Action:
+              </div>
+
+              {event.options.map((option, idx) => {
+                const isSelected = selectedOptionIndex === idx;
+                return (
+                  <div
+                    key={idx}
+                    onClick={() => setSelectedOptionIndex(idx)}
+                    className={`p-3.5 rounded-xl border transition-all cursor-pointer space-y-1.5 ${
+                      isSelected
+                        ? 'bg-amber-950/70 border-amber-500 shadow-lg ring-1 ring-amber-500'
+                        : 'bg-stone-900/80 border-stone-800 hover:border-amber-600/60 hover:bg-stone-900'
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="font-bold text-stone-100 text-sm leading-snug">
+                        {option.label}
+                      </div>
+                      {option.traitRequirements && (
+                        <span className="px-1.5 py-0.5 bg-indigo-950/80 border border-indigo-700/60 rounded text-[10px] text-indigo-300 font-sans font-medium shrink-0">
+                          {option.traitRequirements.join(' / ')}
+                        </span>
+                      )}
+                    </div>
+
+                    <p className="text-stone-400 text-xs italic">
+                      {option.flavor}
+                    </p>
+
+                    <div className="flex flex-wrap gap-1.5 pt-1 font-sans text-[10px]">
+                      {option.consequencesSummary.map((c, i) => (
+                        <span
+                          key={i}
+                          className="px-2 py-0.5 bg-stone-950/80 border border-stone-700/70 rounded text-amber-200"
+                        >
+                          {c}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="p-4 border-t border-stone-800 bg-stone-900/90 flex items-center justify-between font-sans">
+            <button
+              onClick={onClose}
+              className="px-4 py-2 text-stone-400 hover:text-stone-200 text-xs font-medium cursor-pointer"
+            >
+              Dismiss
+            </button>
+
+            <button
+              disabled={selectedOptionIndex === null}
+              onClick={() => {
+                if (selectedOptionIndex !== null) {
+                  const opt = event.options[selectedOptionIndex];
+                  const res = opt.execute(character, world);
+                  onApplyEventOutcome(res.outcomeText, res.updatedWorld);
+                  onClose();
+                }
+              }}
+              className={`px-5 py-2.5 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
+                selectedOptionIndex !== null
+                  ? 'bg-amber-600 hover:bg-amber-500 text-white shadow-lg shadow-amber-900/30'
+                  : 'bg-stone-800 text-stone-500 cursor-not-allowed'
+              }`}
+            >
+              <Crown className="w-4 h-4" />
+              <span>Enact Royal Decree</span>
+            </button>
+          </div>
+        </motion.div>
+      </div>
+    </AnimatePresence>
+  );
+};
+--- END OF FILE src/components/CK3EventModal.tsx ---

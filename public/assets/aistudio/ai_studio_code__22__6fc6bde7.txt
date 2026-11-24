@@ -1,0 +1,315 @@
+--- START OF FILE src/App.tsx ---
+import React, { useState, useMemo, useCallback, useEffect } from 'react';
+import {
+  WorldState,
+  WorldSettings,
+  Realm,
+  Burg,
+  County,
+  Character,
+  SagaStory,
+  Season,
+  WeatherEvent,
+} from './types/world';
+import { generateWorld } from './engine/worldGenerator';
+import { advanceTimeline } from './engine/timelineSimulation';
+import {
+  generateSeasonalWeather,
+  getNextSeason,
+  getRandomNextSeason,
+  generateSpontaneousAnomaly,
+  computeSeasonalState,
+} from './engine/weatherSimulation';
+import { TopBar } from './components/TopBar';
+import { MapCanvas, MapLayer } from './components/MapCanvas';
+import { CourtDossier } from './components/CourtDossier';
+import { TimelineBar } from './components/TimelineBar';
+import { CompendiumModal } from './components/CompendiumModal';
+import { ChroniclesView } from './components/ChroniclesView';
+import { SagaWeaver } from './components/SagaWeaver';
+import { AnimatePresence, motion } from 'motion/react';
+
+export default function App() {
+  const [settings, setSettings] = useState<WorldSettings>({
+    seed: 'Avalon-1042',
+    template: 'Continents',
+    realmCount: 5,
+    cultureCount: 4,
+    seaLevel: 0.28,
+    mapgen4: {
+      windAngleDeg: 30,
+      raininess: 1.2,
+      seaLevel: 0.28,
+      minRiverFlow: 1.8,
+      brushMode: 'inspect',
+      brushSize: 55,
+      brushStrength: 0.12,
+    },
+  });
+
+  const [world, setWorld] = useState<WorldState>(() => generateWorld(settings));
+  const [isGenerating, setIsGenerating] = useState(false);
+
+  const [seasonPhase, setSeasonPhase] = useState<number>(0.2);
+  const [isPlaying, setIsPlaying] = useState<boolean>(false);
+  const [activeWeather, setActiveWeather] = useState<WeatherEvent>(() =>
+    generateSeasonalWeather('Spring')
+  );
+
+  const seasonalState = useMemo(
+    () => computeSeasonalState(seasonPhase, activeWeather),
+    [seasonPhase, activeWeather]
+  );
+
+  const [currentView, setCurrentView] = useState<'map' | 'sagas' | 'chronicles' | 'compendium'>('map');
+  const [isCompendiumOpen, setIsCompendiumOpen] = useState(false);
+  const [compendiumInitialEntityId, setCompendiumInitialEntityId] = useState<string | undefined>();
+
+  const [activeLayers, setActiveLayers] = useState<Record<MapLayer, boolean>>({
+    political: true,
+    feudal: false,
+    heightmap: false,
+    biomes: true,
+    rainfall: false,
+    wind: false,
+    cultures: false,
+    religions: false,
+    burgs: true,
+    rivers: true,
+    relief: true,
+    contours: true,
+    textures: true,
+    routes: true,
+    caravans: true,
+    density: false,
+    weather: true,
+    provinces: true,
+    epidemics: true,
+  });
+
+  const [selectedRealmId, setSelectedRealmId] = useState<string | undefined>(() => world.realms[0]?.id);
+  const [selectedBurgId, setSelectedBurgId] = useState<string | undefined>(undefined);
+  const [selectedCountyId, setSelectedCountyId] = useState<string | undefined>(() => world.counties[0]?.id);
+
+  const selectedRealm = useMemo(
+    () => world.realms.find((r) => r.id === selectedRealmId) || world.realms[0],
+    [world.realms, selectedRealmId]
+  );
+  const selectedBurg = useMemo(
+    () => world.burgs.find((b) => b.id === selectedBurgId) || world.burgs[0],
+    [world.burgs, selectedBurgId]
+  );
+  const selectedCounty = useMemo(
+    () => world.counties.find((c) => c.id === selectedCountyId) || world.counties[0],
+    [world.counties, selectedCountyId]
+  );
+
+  const handleToggleLayer = useCallback((layer: MapLayer) => {
+    setActiveLayers((prev) => ({
+      ...prev,
+      [layer]: !prev[layer],
+    }));
+  }, []);
+
+  useEffect(() => {
+    const TICK_MS = 250;
+    const timer = setInterval(() => {
+      const cycleDurationSec = isPlaying ? 8.0 : 36.0;
+      const dPhase = ((TICK_MS / 1000) / cycleDurationSec) * 4.0;
+
+      setSeasonPhase((prev) => {
+        const next = prev + dPhase;
+        if (next >= 4.0) {
+          setWorld((prevWorld) => advanceTimeline(prevWorld, 1));
+          return next - 4.0;
+        }
+        return next;
+      });
+    }, TICK_MS);
+
+    return () => clearInterval(timer);
+  }, [isPlaying]);
+
+  useEffect(() => {
+    const weatherTimer = setInterval(() => {
+      const rollAnomaly = Math.random() < 0.45;
+      if (rollAnomaly) {
+        setActiveWeather(generateSpontaneousAnomaly(seasonalState.currentSeason, world));
+      } else {
+        setActiveWeather(generateSeasonalWeather(seasonalState.currentSeason, world));
+      }
+    }, 14000);
+
+    return () => clearInterval(weatherTimer);
+  }, [seasonalState.currentSeason, world]);
+
+  const handleRegenerate = useCallback(() => {
+    setIsGenerating(true);
+    setTimeout(() => {
+      const newSeed = `Realm-${Math.floor(Math.random() * 90000 + 10000)}`;
+      const newSettings = { ...settings, seed: newSeed };
+      setSettings(newSettings);
+      const newWorld = generateWorld(newSettings);
+      setWorld(newWorld);
+      setSelectedRealmId(newWorld.realms[0]?.id);
+      setSelectedBurgId(undefined);
+      setSelectedCountyId(newWorld.counties[0]?.id);
+      setActiveWeather(generateSeasonalWeather(seasonalState.currentSeason, newWorld));
+      setIsGenerating(false);
+    }, 60);
+  }, [settings, seasonalState.currentSeason]);
+
+  const handleUpdateSettings = useCallback((newSettings: WorldSettings) => {
+    setSettings(newSettings);
+    const newWorld = generateWorld(newSettings);
+    setWorld(newWorld);
+    setSelectedRealmId(newWorld.realms[0]?.id);
+    setSelectedBurgId(undefined);
+    setSelectedCountyId(newWorld.counties[0]?.id);
+    setActiveWeather(generateSeasonalWeather(seasonalState.currentSeason, newWorld));
+  }, [seasonalState.currentSeason]);
+
+  const handleAdvanceYears = useCallback((years: number) => {
+    setWorld((prev) => advanceTimeline(prev, years));
+    setActiveWeather(generateSeasonalWeather(seasonalState.currentSeason, world));
+  }, [seasonalState.currentSeason, world]);
+
+  const handleSelectRealm = useCallback((realm: Realm) => {
+    setSelectedRealmId(realm.id);
+  }, []);
+
+  const handleSelectBurg = useCallback((burg: Burg) => {
+    setSelectedBurgId(burg.id);
+  }, []);
+
+  const handleSelectCounty = useCallback((county: County) => {
+    setSelectedCountyId(county.id);
+  }, []);
+
+  const handleSelectCharacter = useCallback((char: Character) => {
+    setSelectedRealmId(char.realmId);
+    if (char.countyId) {
+      setSelectedCountyId(char.countyId);
+    }
+  }, []);
+
+  const handleOpenCompendiumForEntity = useCallback((entityId: string) => {
+    setCompendiumInitialEntityId(entityId);
+    setIsCompendiumOpen(true);
+  }, []);
+
+  const handleWeaveStoryForCharacter = useCallback((char: Character) => {
+    setSelectedRealmId(char.realmId);
+    if (char.countyId) setSelectedCountyId(char.countyId);
+    setCurrentView('sagas');
+  }, []);
+
+  const handleWeaveStoryForTarget = useCallback((realm?: Realm, burg?: Burg) => {
+    if (realm) setSelectedRealmId(realm.id);
+    if (burg) setSelectedBurgId(burg.id);
+    setCurrentView('sagas');
+  }, []);
+
+  const handleSagaCreated = useCallback((_newStory: SagaStory) => {
+    setWorld((prev) => ({ ...prev }));
+  }, []);
+
+  return (
+    <div className="relative w-screen h-screen bg-stone-950 text-stone-100 overflow-hidden font-sans selection:bg-amber-800">
+      
+      {/* Immersive Full-Bleed Map Canvas Layer */}
+      <div className="absolute inset-0 z-0">
+        <MapCanvas
+          world={world}
+          activeLayers={activeLayers}
+          onToggleLayer={handleToggleLayer}
+          selectedRealmId={selectedRealmId}
+          selectedBurgId={selectedBurgId}
+          selectedCountyId={selectedCountyId}
+          onSelectBurg={handleSelectBurg}
+          onSelectRealm={handleSelectRealm}
+          onSelectCounty={handleSelectCounty}
+          onWeaveStoryForTarget={handleWeaveStoryForTarget}
+          currentSeason={seasonalState.currentSeason}
+          activeWeather={activeWeather}
+          seasonalState={seasonalState}
+        />
+      </div>
+
+      {/* Floating Glassmorphic Top Bar */}
+      <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20 w-full max-w-5xl px-4 pointer-events-none">
+        <div className="pointer-events-auto">
+          <TopBar
+            currentView={currentView}
+            onChangeView={setCurrentView}
+            onOpenCompendium={() => {
+              setCompendiumInitialEntityId(undefined);
+              setIsCompendiumOpen(true);
+            }}
+            settings={settings}
+            onUpdateSettings={handleUpdateSettings}
+            onRegenerate={handleRegenerate}
+            isGenerating={isGenerating}
+          />
+        </div>
+      </div>
+
+      {/* Floating Timeline Controls */}
+      <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-20 pointer-events-none">
+        <div className="pointer-events-auto">
+          <TimelineBar
+            currentYear={world.currentYear}
+            onAdvanceYears={handleAdvanceYears}
+            recentEvents={world.history}
+            onOpenChronicles={() => setCurrentView('chronicles')}
+            isPlaying={isPlaying}
+            onTogglePlay={() => setIsPlaying((p) => !p)}
+          />
+        </div>
+      </div>
+
+      {/* Contextual Sliding Panels based on currentView */}
+      <AnimatePresence>
+        {currentView === 'map' ? (
+          selectedRealmId && (
+            <CourtDossier
+              world={world}
+              selectedRealm={selectedRealm}
+              selectedBurg={selectedBurg}
+              selectedCounty={selectedCounty}
+              onSelectCharacter={handleSelectCharacter}
+              onSelectRealm={handleSelectRealm}
+              onSelectBurg={handleSelectBurg}
+              onSelectCounty={handleSelectCounty}
+              onOpenCompendiumForEntity={handleOpenCompendiumForEntity}
+              onWeaveStoryForCharacter={handleWeaveStoryForCharacter}
+              onUpdateWorld={setWorld}
+            />
+          )
+        ) : currentView === 'sagas' ? (
+          <motion.div initial={{opacity: 0, y: 50}} animate={{opacity: 1, y: 0}} exit={{opacity: 0, y: 50}} className="absolute inset-0 z-30 pt-24 px-8 pb-8 pointer-events-none">
+             <div className="w-full h-full pointer-events-auto shadow-2xl rounded-2xl overflow-hidden border border-white/10">
+               <SagaWeaver world={world} onSagaCreated={handleSagaCreated} onOpenCompendiumForEntity={handleOpenCompendiumForEntity} />
+             </div>
+          </motion.div>
+        ) : (
+          <motion.div initial={{opacity: 0, scale: 0.95}} animate={{opacity: 1, scale: 1}} exit={{opacity: 0, scale: 0.95}} className="absolute inset-0 z-30 pt-24 px-8 pb-8 pointer-events-none">
+             <div className="w-full h-full pointer-events-auto shadow-2xl rounded-2xl overflow-hidden border border-white/10">
+               <ChroniclesView world={world} onSelectRealmById={(realmId) => { setSelectedRealmId(realmId); setCurrentView('map'); }} onOpenCompendiumForEntity={handleOpenCompendiumForEntity} />
+             </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* WeasyPrint Compendium of the Realm Modal */}
+      <CompendiumModal
+        isOpen={isCompendiumOpen}
+        onClose={() => setIsCompendiumOpen(false)}
+        entities={world.loreEntities}
+        currentYear={world.currentYear}
+        selectedEntityId={compendiumInitialEntityId}
+      />
+    </div>
+  );
+}
+--- END OF FILE src/App.tsx ---

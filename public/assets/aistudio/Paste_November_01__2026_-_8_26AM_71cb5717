@@ -1,0 +1,1462 @@
+--- START OF FILE src/engine/v17GrandStrategyEngine.ts ---
+import {
+  WorldState,
+  Character,
+  Holding,
+  Province,
+  Claim,
+  Epidemic,
+  CadetHouse,
+  CourtPosition,
+  OrganicGravitas,
+  CrimeRecord,
+  CrimeType,
+  PunishmentType,
+  OpinionMod,
+  Favor,
+  Faction,
+  RealmLaws,
+  RealmState,
+  ForeignNation,
+  PsychologicalState,
+  TerrainType,
+  AccessLevel,
+  EstateType,
+  HistoricalEvent,
+  V17Secret,
+} from '../types/world';
+import {
+  V17_TRAIT_DB,
+  getHookMultiplier,
+  computeV17StatModifier,
+  V17Stat,
+} from './v17TraitDB';
+
+// ============================================================================
+// 1. STATS & MATH HELPERS
+// ============================================================================
+
+export function getTerrainTravelModifier(terrain: TerrainType): number {
+  switch (terrain) {
+    case 'Plains': return 1.0;
+    case 'Forest': return 1.3;
+    case 'Mountains': return 1.8;
+    case 'Coastal': return 1.1;
+  }
+}
+
+export function getCharacterV17Stat(char: Character, stat: V17Stat, world?: WorldState): number {
+  let base = 10;
+  switch (stat) {
+    case 'MARTIAL': base = char.baseMartial || 10; break;
+    case 'DIPLOMACY': base = char.baseDiplomacy || 10; break;
+    case 'STEWARDSHIP': base = char.baseStewardship || 10; break;
+    case 'INTRIGUE': base = char.baseIntrigue || 10; break;
+    case 'LEARNING': base = char.baseLearning || 10; break;
+  }
+
+  const traits = char.v17Traits || char.personalityTraits || [];
+  const mod = computeV17StatModifier(traits, stat);
+
+  if (world && world.holdings) {
+    for (const h of world.holdings) {
+      if (h.ownerId === char.id) {
+        if (stat === 'LEARNING' && h.estateType === 'Temple') base += 2.0;
+        else if (stat === 'MARTIAL' && h.estateType === 'Castle') base += 0.5;
+        else if (stat === 'STEWARDSHIP' && h.estateType === 'City') base += 0.5;
+      }
+    }
+  }
+
+  return Math.max(0, base * (1.0 + mod));
+}
+
+export function computeTotalGravitas(g: OrganicGravitas): number {
+  const mil = Math.log10(1.0 + Math.max(0, g.militaryAutonomy)) * 100.0;
+  const pop = Math.log10(1.0 + Math.max(0, g.populistLoyalty)) * 50.0;
+  return (mil + pop) * (1.0 + g.sovereignDebtHeld / 500.0) * (1.0 + g.lineagePrestige * 0.01);
+}
+
+export function getHoldingYields(h: Holding): { tax: number; levy: number } {
+  const rawTax = h.baseTax * (h.dev / 10.0);
+  const rawLevy = Math.floor(h.baseLevy * (h.dev / 10.0));
+  if (h.estateType === 'Castle') return { tax: rawTax * 0.7, levy: Math.floor(rawLevy * 1.3) };
+  if (h.estateType === 'City') return { tax: rawTax * 1.6, levy: Math.floor(rawLevy * 0.5) };
+  if (h.estateType === 'Temple') return { tax: rawTax * 1.1, levy: Math.floor(rawLevy * 0.8) };
+  return { tax: rawTax, levy: rawLevy };
+}
+
+// ============================================================================
+// 2. GENETICS & REPRODUCTION ENGINE
+// ============================================================================
+
+export class GeneticsEngine {
+  static areSiblings(a: Character, b: Character): boolean {
+    return (
+      (Boolean(a.motherId) && a.motherId === b.motherId) ||
+      (Boolean(a.realFatherId) && a.realFatherId === b.realFatherId)
+    );
+  }
+
+  static areCousins(a: Character, b: Character, w: WorldState): boolean {
+    const aParents = [a.motherId, a.realFatherId].filter(Boolean).map(id => w.characters.find(c => c.id === id)).filter(Boolean) as Character[];
+    const bParents = [b.motherId, b.realFatherId].filter(Boolean).map(id => w.characters.find(c => c.id === id)).filter(Boolean) as Character[];
+
+    for (const ap of aParents) {
+      for (const bp of bParents) {
+        if (ap.id !== bp.id && GeneticsEngine.areSiblings(ap, bp)) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  static generate(mother: Character | undefined, father: Character | undefined, w: WorldState): string[] {
+    const traits = new Set<string>();
+    const parents = [mother, father].filter(Boolean) as Character[];
+
+    // 1. Inherit Physical & Mental traits from parents (40% chance)
+    for (const p of parents) {
+      const pTraits = p.v17Traits || p.personalityTraits || [];
+      for (const tName of pTraits) {
+        const def = V17_TRAIT_DB[tName];
+        if (def && def.inheritable && (def.category === 'PHYSICAL' || def.category === 'MENTAL')) {
+          if (Math.random() < 0.40) traits.add(tName);
+        }
+      }
+    }
+
+    // 2. Behavioral personality traits (pick 1-3 randomly)
+    const behavioralDefs = Object.values(V17_TRAIT_DB).filter(t => t.category === 'BEHAVIORAL' && t.minAge === 0);
+    const count = 1 + Math.floor(Math.random() * 3);
+    for (let i = 0; i < count; i++) {
+      const chosen = behavioralDefs[Math.floor(Math.random() * behavioralDefs.length)];
+      traits.add(chosen.name);
+    }
+
+    // 3. Inbreeding checks
+    if (mother && father) {
+      if (GeneticsEngine.areSiblings(mother, father)) {
+        if (Math.random() < 0.40) traits.add('Inbred');
+      } else if (GeneticsEngine.areCousins(mother, father, w)) {
+        if (Math.random() < 0.08) traits.add('Inbred');
+      }
+
+      // Congenital bloodlines pass-through (40% if parent has it)
+      for (const t of Object.values(V17_TRAIT_DB)) {
+        if (t.category === 'CONGENITAL' && parents.some(p => (p.v17Traits || []).includes(t.name))) {
+          if (Math.random() < 0.40) traits.add(t.name);
+        }
+      }
+    }
+
+    return Array.from(traits);
+  }
+}
+
+// ============================================================================
+// 3. LUST, PREGNANCY & DYNASTY ENGINE
+// ============================================================================
+
+export class LustAndDynastyEngine {
+  static getAgeLibido(age: number): number {
+    if (age < 20) return 30.0;
+    if (age < 35) return 50.0;
+    if (age < 50) return 40.0;
+    if (age < 65) return 25.0;
+    return 15.0;
+  }
+
+  static process(c: Character, w: WorldState): void {
+    const baseLibido = LustAndDynastyEngine.getAgeLibido(c.age);
+    const suppression = c.loverId ? 0.5 : 0.0;
+    const fertilityMod = getHookMultiplier(c.v17Traits || c.personalityTraits || [], 'FERTILITY');
+    c.netLibidoPressure = Math.max(0.0, baseLibido * fertilityMod * (1.0 - suppression));
+
+    if (c.gender !== 'female' || !c.isAlive) return;
+
+    // Advance Pregnancy
+    if (c.monthsPregnant !== undefined && c.monthsPregnant >= 0) {
+      c.monthsPregnant += 1;
+      if (c.monthsPregnant >= 9) {
+        c.monthsPregnant = -1;
+        LustAndDynastyEngine.giveBirth(c, w);
+      }
+      return;
+    }
+
+    // Check Conception (female 16-48 with partner)
+    const partnerId = c.loverId || c.spouseId;
+    if (c.age >= 16 && c.age <= 48 && partnerId) {
+      let chance = 0.035 * fertilityMod;
+      if (c.trueLoveId === partnerId) chance *= 2.5;
+
+      if (Math.random() < chance) {
+        c.monthsPregnant = 0;
+        c.pregnantBy = partnerId;
+        c.conceivedInWedlockWith = partnerId === c.spouseId ? c.spouseId : undefined;
+      }
+    }
+
+    // Adultery Discovery Roll
+    if (c.loverId && c.spouseId && Math.random() < 0.03) {
+      const spouse = w.characters.find(x => x.id === c.spouseId);
+      const lover = w.characters.find(x => x.id === c.loverId);
+      if (spouse && lover) {
+        c.loverId = undefined;
+        lover.loverId = undefined;
+        c.stress = Math.min(300, c.stress + 50);
+
+        if (!spouse.grudges) spouse.grudges = [];
+        spouse.grudges.push({ reason: 'Cuckolded Me', value: -100, months: 240 });
+
+        const spouseTraits = spouse.v17Traits || spouse.personalityTraits || [];
+        if (!spouseTraits.includes('Betrayed')) {
+          spouseTraits.push('Betrayed');
+          spouse.v17Traits = spouseTraits;
+        }
+
+        w.history.unshift({
+          id: `hist_adultery_disc_${Date.now() % 10000}`,
+          year: w.currentYear,
+          title: `Scandal: Adultery Discovered!`,
+          category: 'Dynastic Drama',
+          description: `${spouse.name} discovered ${c.name}'s illicit affair with ${lover.name}! A furious rift has torn the marriage.`,
+          primaryActorId: spouse.id,
+          secondaryActorId: c.id,
+          realmId: c.realmId,
+        });
+
+        if (spouseTraits.includes('Wrathful') || spouseTraits.includes('Just')) {
+          JusticeEngine.accuse(spouse, c, 'Adultery', w);
+        } else {
+          if (!spouse.v17SecretsHeld) spouse.v17SecretsHeld = [];
+          spouse.v17SecretsHeld.push({
+            secretType: 'Adultery',
+            targetId: c.id,
+            holderId: spouse.id,
+            lethality: 80.0,
+          });
+        }
+      }
+    }
+  }
+
+  static giveBirth(mother: Character, w: WorldState): void {
+    const realFather = w.characters.find(c => c.id === mother.pregnantBy);
+    let isKnownBastard = false;
+    let knownFatherId = mother.spouseId;
+
+    const adulteryExposed = (mother.crimes || []).some(
+      cr => cr.crimeType === 'Adultery' && cr.monthRecorded >= ((w.month || 0) - 9)
+    );
+
+    if (mother.conceivedInWedlockWith) {
+      knownFatherId = mother.conceivedInWedlockWith;
+      isKnownBastard = false;
+      mother.conceivedInWedlockWith = undefined;
+    } else if (!mother.spouseId) {
+      knownFatherId = realFather?.id;
+      isKnownBastard = true;
+    } else if (mother.spouseId !== mother.pregnantBy) {
+      if (adulteryExposed) {
+        knownFatherId = realFather?.id;
+        isKnownBastard = true;
+      } else {
+        knownFatherId = mother.spouseId;
+        if (realFather) {
+          if (!realFather.v17SecretsHeld) realFather.v17SecretsHeld = [];
+          realFather.v17SecretsHeld.push({
+            secretType: 'Illegitimate_Child',
+            targetId: mother.id,
+            holderId: realFather.id,
+            lethality: 90.0,
+          });
+        }
+      }
+    }
+
+    const cid = `char_${w.characters.length + 100}`;
+    const kFather = w.characters.find(c => c.id === knownFatherId);
+    const dynName = isKnownBastard ? mother.houseName : (kFather?.houseName || mother.houseName);
+    const dynPrestige = isKnownBastard ? (mother.prestige || 100) : (kFather?.prestige || mother.prestige || 100);
+
+    const isBoy = Math.random() < 0.5;
+    const names = isBoy
+      ? ['Aethelgard', 'Baelor', 'Cassian', 'Godfrey', 'Theodoric', 'Valerius', 'Almeric', 'Gareth']
+      : ['Aurelia', 'Elysia', 'Gwendolyn', 'Isolde', 'Seraphina', 'Vespera', 'Vivienne', 'Beatrix'];
+    const chosenName = `${names[Math.floor(Math.random() * names.length)]} of House ${dynName}`;
+
+    const childTraits = GeneticsEngine.generate(mother, realFather, w);
+    if (isKnownBastard && !childTraits.includes('Bastard')) {
+      childTraits.push('Bastard');
+    }
+
+    const child: Character = {
+      id: cid,
+      name: chosenName,
+      houseName: dynName,
+      houseMotto: mother.houseMotto || 'Unbroken by Time',
+      title: isKnownBastard ? `Bastard Child of House ${dynName}` : `Noble Scion of House ${dynName}`,
+      role: isKnownBastard ? 'Disinherited Bastard' : 'Cadet Prince',
+      gender: isBoy ? 'male' : 'female',
+      age: 0,
+      isAlive: true,
+      realmId: mother.realmId,
+      provinceId: mother.provinceId,
+      baseDiplomacy: 8,
+      baseMartial: 8,
+      baseStewardship: 8,
+      baseIntrigue: 8,
+      baseLearning: 8,
+      baseProwess: 6,
+      personalityTraits: childTraits.slice(0, 3),
+      v17Traits: childTraits,
+      congenitalTraits: childTraits.filter(t => t.includes('Blood') || t === 'Inbred' || t === 'Genius'),
+      physicalHealthTraits: [],
+      commanderTraits: [],
+      lifestyleTraits: [],
+      aiArchetype: 'Honorable Paragon',
+      stress: 0,
+      stressLevel: 0,
+      dread: 0,
+      prestige: Math.round(dynPrestige * 0.5),
+      piety: 50,
+      ambition: 'To survive court plots and uphold dynastic honors',
+      tragicFlaw: 'Youthful inexperience in statecraft',
+      darkSecret: isKnownBastard ? 'Born of forbidden passion outside royal wedlock' : 'None',
+      sacredOath: 'To defend family and realm unto death',
+      knownSecrets: [],
+      hooksHeld: [],
+      hooksOnMe: [],
+      opinions: {},
+      coatOfArms: mother.coatOfArms,
+      motherId: mother.id,
+      realFatherId: realFather?.id,
+      knownFatherId: knownFatherId,
+    };
+
+    w.characters.push(child);
+    if (!mother.children) mother.children = [];
+    mother.children.push(cid);
+    if (knownFatherId && kFather) {
+      if (!kFather.children) kFather.children = [];
+      kFather.children.push(cid);
+    }
+
+    w.history.unshift({
+      id: `hist_birth_${cid}_${Date.now() % 10000}`,
+      year: w.currentYear,
+      title: `Birth in House ${dynName}: ${chosenName}`,
+      category: 'Dynastic Drama',
+      description: `${mother.name} safely gave birth to ${chosenName}${isKnownBastard ? ' (Born out of lawful wedlock as a Bastard)' : ''}!`,
+      primaryActorId: mother.id,
+      secondaryActorId: kFather?.id,
+      realmId: mother.realmId,
+    });
+  }
+}
+
+// ============================================
+// 4. GEOGRAPHY & TRAVEL ENGINE (SPATIAL HAZARDS)
+// ============================================
+
+export class GeographyAndTravelEngine {
+  static initiateTravel(
+    c: Character,
+    destProvId: string,
+    purpose: string,
+    w: WorldState
+  ): boolean {
+    if (c.isImprisoned || c.provinceId === destProvId) return false;
+    const prov = w.provinces?.find((p) => p.id === c.provinceId);
+    const dest = w.provinces?.find((p) => p.id === destProvId);
+    if (!prov || !dest) return false;
+
+    const hops = prov.neighbors.includes(destProvId) ? 1 : 2;
+    const terrainMod = getTerrainTravelModifier(dest.terrain);
+    const travelTime = Math.max(1, Math.round(hops * terrainMod));
+
+    c.isTraveling = true;
+    c.travelDestProvinceId = destProvId;
+    c.travelMonthsLeft = travelTime;
+    c.travelPurpose = purpose;
+
+    w.history.unshift({
+      id: `hist_travel_${c.id}_${w.currentYear}_${Date.now() % 10000}`,
+      year: w.currentYear,
+      title: `Noble Journey: ${c.name}`,
+      category: 'Dynastic Drama',
+      description: `${c.name} departed ${prov.name} traveling to ${dest.name} for ${purpose} (Expected Journey: ${travelTime} months across ${dest.terrain} lands).`,
+      primaryActorId: c.id,
+      realmId: c.realmId,
+    });
+
+    return true;
+  }
+
+  static step(w: WorldState): void {
+    if (!w.provinces) return;
+
+    for (const c of w.characters) {
+      if (!c.isAlive) continue;
+
+      if (!c.isTraveling) {
+        if (
+          c.courtPosition &&
+          (c.courtPosition.orbit === 'INNER_RING' || c.courtPosition.orbit === 'MIDDLE_RING')
+        ) {
+          if (w.capitalProvinceId && c.provinceId !== w.capitalProvinceId && c.id !== w.monarchId) {
+            GeographyAndTravelEngine.initiateTravel(c, w.capitalProvinceId, 'Court Duty', w);
+          }
+        }
+        continue;
+      }
+
+      c.travelMonthsLeft = (c.travelMonthsLeft || 1) - 1;
+
+      const currentProv = w.provinces.find((p) => p.id === c.provinceId);
+      let hazardChance = 0.04;
+      if (currentProv && currentProv.terrain === 'Mountains') hazardChance = 0.08;
+
+      if (Math.random() < hazardChance) {
+        const hazards = ['Bandit Ambush', 'Treacherous Mountain Storm', 'Alpine Rockslide'];
+        const chosenHazard = hazards[Math.floor(Math.random() * hazards.length)];
+        c.stress = Math.min(300, c.stress + 25);
+
+        let injured = false;
+        const traits = c.v17Traits || c.personalityTraits || [];
+        if (Math.random() < 0.4 && !traits.includes('Wounded')) {
+          traits.push('Wounded');
+          c.v17Traits = traits;
+          injured = true;
+        }
+
+        w.history.unshift({
+          id: `hist_hazard_${c.id}_${w.currentYear}_${Date.now() % 10000}`,
+          year: w.currentYear,
+          title: `Travel Peril: ${c.name}`,
+          category: 'Dynastic Drama',
+          description: `${c.name} encountered a ${chosenHazard} while journeying along the high road!${
+            injured ? ' The noble suffered severe wounds from the clash.' : ''
+          }`,
+          primaryActorId: c.id,
+          realmId: c.realmId,
+        });
+      }
+
+      if ((c.travelMonthsLeft || 0) <= 0) {
+        c.isTraveling = false;
+        c.provinceId = c.travelDestProvinceId || c.provinceId;
+        const dest = w.provinces.find((p) => p.id === c.provinceId);
+        c.travelDestProvinceId = undefined;
+        c.travelPurpose = '';
+
+        w.history.unshift({
+          id: `hist_arrival_${c.id}_${w.currentYear}_${Date.now() % 10000}`,
+          year: w.currentYear,
+          title: `Arrival at ${dest?.name || 'Destination'}`,
+          category: 'Dynastic Drama',
+          description: `${c.name} has arrived safely in ${dest?.name || 'the province'} to take up residence.`,
+          primaryActorId: c.id,
+          realmId: c.realmId,
+        });
+      }
+    }
+  }
+}
+
+// ============================================
+// 5. PLAGUE & PROVINCIAL QUARANTINE ENGINE
+// ============================================
+
+export class PlagueEngine {
+  static step(w: WorldState): void {
+    if (!w.epidemics) w.epidemics = [];
+    if (!w.provinces) return;
+    if (!w.lockedDownProvinces) w.lockedDownProvinces = [];
+
+    if (Math.random() < 0.04 && w.epidemics.length < 2) {
+      const cityHoldings = w.holdings?.filter((h) => h.estateType === 'City') || [];
+      if (cityHoldings.length > 0) {
+        const epicenter = cityHoldings[Math.floor(Math.random() * cityHoldings.length)];
+        const names = ['The Grey Pox', 'The Red Death', 'Sweating Sickness', 'Bubonic Plague'];
+        const chosenName = names[Math.floor(Math.random() * names.length)];
+        const plague: Epidemic = {
+          id: `epidemic_${Date.now()}`,
+          name: chosenName,
+          infectedProvinceIds: [epicenter.provinceId],
+          lethality: 0.3 + Math.random() * 0.3,
+          monthsRemaining: 18,
+        };
+        w.epidemics.push(plague);
+
+        const prov = w.provinces.find((p) => p.id === epicenter.provinceId);
+        w.history.unshift({
+          id: `hist_plague_${Date.now()}`,
+          year: w.currentYear,
+          title: `Pestilence Erupts: ${chosenName}`,
+          category: 'Great Cataclysm',
+          description: `An outbreak of ${chosenName} has erupted in the trading streets of ${
+            prov?.name || 'the realm'
+          }! The bells toll mournfully.`,
+          realmId: prov?.realmId,
+        });
+      }
+    }
+
+    for (let i = w.epidemics.length - 1; i >= 0; i--) {
+      const ep = w.epidemics[i];
+      ep.monthsRemaining -= 1;
+      if (ep.monthsRemaining <= 0) {
+        w.history.unshift({
+          id: `hist_remission_${ep.id}`,
+          year: w.currentYear,
+          title: `Remission: ${ep.name}`,
+          category: 'Great Cataclysm',
+          description: `${ep.name} has finally burned itself out across the provinces. Purifying bonfires celebrate the return of health.`,
+        });
+        w.epidemics.splice(i, 1);
+        continue;
+      }
+
+      const newlyInfected: string[] = [];
+      for (const pid of ep.infectedProvinceIds) {
+        const prov = w.provinces.find((p) => p.id === pid);
+        if (!prov) continue;
+
+        for (const neighborId of prov.neighbors) {
+          if (
+            !ep.infectedProvinceIds.includes(neighborId) &&
+            !w.lockedDownProvinces.includes(neighborId)
+          ) {
+            if (Math.random() < 0.25) {
+              newlyInfected.push(neighborId);
+              const nProv = w.provinces.find((p) => p.id === neighborId);
+              w.history.unshift({
+                id: `hist_plague_spread_${ep.id}_${neighborId}_${Date.now() % 10000}`,
+                year: w.currentYear,
+                title: `Plague Frontier: ${ep.name}`,
+                category: 'Great Cataclysm',
+                description: `${ep.name} has crossed the borderlands into ${
+                  nProv?.name || 'neighboring province'
+                }!`,
+                realmId: nProv?.realmId,
+              });
+            }
+          }
+        }
+      }
+
+      ep.infectedProvinceIds.push(...newlyInfected);
+
+      for (const c of w.characters) {
+        if (!c.isAlive || !c.provinceId) continue;
+        if (ep.infectedProvinceIds.includes(c.provinceId)) {
+          if (w.lockedDownProvinces.includes(c.provinceId)) continue;
+
+          const traits = c.v17Traits || c.personalityTraits || [];
+          if (Math.random() < 0.12 && !traits.includes('Ill')) {
+            traits.push('Ill');
+            c.v17Traits = traits;
+            c.stress = Math.min(300, c.stress + 40);
+
+            const healthMod = getHookMultiplier(traits, 'HEALTH');
+            if (Math.random() < ep.lethality * healthMod) {
+              c.isAlive = false;
+              w.history.unshift({
+                id: `hist_plague_death_${c.id}_${Date.now() % 10000}`,
+                year: w.currentYear,
+                title: `Plague Death: ${c.name}`,
+                category: 'Great Cataclysm',
+                description: `${c.name} succumbed to the agonizing fever of ${ep.name}.`,
+                primaryActorId: c.id,
+                realmId: c.realmId,
+              });
+            }
+          }
+        }
+      }
+    }
+  }
+
+  static toggleQuarantine(provId: string, w: WorldState): boolean {
+    if (!w.lockedDownProvinces) w.lockedDownProvinces = [];
+    const prov = w.provinces?.find((p) => p.id === provId);
+    if (!prov) return false;
+
+    const idx = w.lockedDownProvinces.indexOf(provId);
+    if (idx >= 0) {
+      w.lockedDownProvinces.splice(idx, 1);
+      prov.isQuarantined = false;
+      w.history.unshift({
+        id: `hist_quarantine_lifted_${provId}_${Date.now() % 10000}`,
+        year: w.currentYear,
+        title: `Quarantine Lifted: ${prov.name}`,
+        category: 'Dynastic Drama',
+        description: `Castle gates in ${prov.name} were unbarred; commercial caravans and trade flow resume.`,
+        realmId: prov.realmId,
+      });
+      return false;
+    } else {
+      w.lockedDownProvinces.push(provId);
+      prov.isQuarantined = true;
+      w.history.unshift({
+        id: `hist_quarantine_enforced_${provId}_${Date.now() % 10000}`,
+        year: w.currentYear,
+        title: `Quarantine Enforced: ${prov.name}`,
+        category: 'Dynastic Drama',
+        description: `By royal decree, ${prov.name} is placed under strict lockdown. Portcullises lowered to ward off pestilence.`,
+        realmId: prov.realmId,
+      });
+      return true;
+    }
+  }
+}
+
+// ============================================
+// 6. CLAIMS, MARCHING ARMIES & WARFARE
+// ============================================
+
+export class ClaimAndWarEngine {
+  static fabricateClaim(c: Character, targetHolding: Holding, w: WorldState): boolean {
+    const cost = 80;
+    if ((c.treasury || 0) < cost) return false;
+    c.treasury = (c.treasury || 0) - cost;
+
+    if (!c.claims) c.claims = [];
+    c.claims.push({
+      holdingId: targetHolding.id,
+      claimantId: c.id,
+      isPressed: false,
+      isStrong: false,
+    });
+
+    w.history.unshift({
+      id: `hist_fab_claim_${c.id}_${targetHolding.id}_${Date.now() % 10000}`,
+      year: w.currentYear,
+      title: `Claim Fabricated: ${targetHolding.name}`,
+      category: 'Dynastic Drama',
+      description: `Through forged genealogical scrolls and secret bribes, ${c.name} manufactured a legal claim on ${targetHolding.name}!`,
+      primaryActorId: c.id,
+      realmId: c.realmId,
+    });
+
+    return true;
+  }
+
+  static declareClaimantWar(
+    attacker: Character,
+    claim: Claim,
+    w: WorldState
+  ): { won: boolean; summary: string } {
+    const holding = w.holdings?.find((h) => h.id === claim.holdingId);
+    if (!holding || !holding.ownerId) return { won: false, summary: 'Holding has no ruler.' };
+    const defender = w.characters.find((c) => c.id === holding.ownerId);
+    if (!defender || defender.id === attacker.id) return { won: false, summary: 'Invalid defender.' };
+
+    const attackerProv = w.provinces?.find(p => p.id === attacker.provinceId);
+    const defProv = w.provinces?.find((p) => p.id === holding.provinceId);
+    if (!attackerProv || !defProv) return { won: false, summary: 'Location unknown.' };
+
+    const attackerMil = (attacker.organicGravitas?.militaryAutonomy || 300) + (attacker.menAtArms || 50) * 3.0;
+    const attackerTactics = getCharacterV17Stat(attacker, 'MARTIAL', w);
+    const attackerPower = attackerMil * (1.0 + attackerTactics / 25.0) * (0.85 + Math.random() * 0.3);
+
+    if (!w.armies) w.armies = [];
+    const realm = w.realms.find(r => r.id === attacker.realmId);
+    
+    w.armies.push({
+      id: `army_${Date.now()}`,
+      attackerId: attacker.id,
+      defenderId: defender.id,
+      targetHoldingId: holding.id,
+      startX: attackerProv.capitalX,
+      startY: attackerProv.capitalY,
+      targetX: defProv.capitalX,
+      targetY: defProv.capitalY,
+      progress: 0,
+      strength: attackerPower,
+      color: realm?.color || '#dc2626',
+      claim: claim
+    });
+
+    const summary = `WAR DECLARED: ${attacker.name} has raised an army of ${Math.round(attackerPower)} men and is marching on ${holding.name}!`;
+    return { won: true, summary };
+  }
+
+  static stepArmies(w: WorldState) {
+    if (!w.armies) return;
+    for (let i = w.armies.length - 1; i >= 0; i--) {
+      const army = w.armies[i];
+      army.progress += 0.05;
+
+      if (army.progress >= 1.0) {
+        const holding = w.holdings?.find(h => h.id === army.targetHoldingId);
+        const attacker = w.characters.find(c => c.id === army.attackerId);
+        const defender = w.characters.find(c => c.id === army.defenderId);
+        
+        if (holding && attacker && defender) {
+          const defProv = w.provinces?.find(p => p.id === holding.provinceId);
+          let terrainMult = defProv?.terrain === 'Mountains' ? 1.4 : defProv?.terrain === 'Forest' ? 1.2 : 1.0;
+          const defenderTactics = getCharacterV17Stat(defender, 'MARTIAL', w);
+          const defenderMil = ((defender.organicGravitas?.militaryAutonomy || 300) + (defender.menAtArms || 50) * 3.0) * terrainMult;
+          const defenderPower = defenderMil * (1.0 + defenderTactics / 25.0) * (0.85 + Math.random() * 0.3);
+
+          if (army.strength > defenderPower) {
+            holding.ownerId = attacker.id;
+            army.claim.isPressed = true;
+            if (!defender.grudges) defender.grudges = [];
+            defender.grudges.push({ reason: `Usurped ${holding.name}`, value: -100, months: 360 });
+
+            w.history.unshift({
+              id: `hist_war_win_${Date.now() % 10000}`,
+              year: w.currentYear,
+              title: `Siege of ${holding.name} Won`,
+              category: 'War & Conquest',
+              description: `${attacker.name}'s host shattered ${defender.name}'s garrisons! ${holding.name} was annexed.`,
+              primaryActorId: attacker.id,
+              secondaryActorId: defender.id,
+              realmId: attacker.realmId,
+            });
+          } else {
+            attacker.treasury = Math.max(0, (attacker.treasury || 0) - 120);
+            defender.treasury = (defender.treasury || 0) + 120;
+            attacker.stress = Math.min(300, (attacker.stress || 0) + 45);
+            w.history.unshift({
+              id: `hist_war_repulse_${Date.now() % 10000}`,
+              year: w.currentYear,
+              title: `Invasion of ${holding.name} Repulsed`,
+              category: 'War & Conquest',
+              description: `${defender.name} held the ramparts! ${attacker.name} was routed and paid 120g in indemnities.`,
+              primaryActorId: defender.id,
+              secondaryActorId: attacker.id,
+              realmId: defender.realmId,
+            });
+          }
+        }
+        w.armies.splice(i, 1);
+      }
+    }
+  }
+}
+
+// ============================================
+// 7. CADET HOUSES & DYNASTIC FEUDS
+// ============================================
+
+export class DynasticFeudEngine {
+  static createCadetBranch(founder: Character, estate: Holding, w: WorldState): CadetHouse {
+    if (!w.cadetHouses) w.cadetHouses = {};
+    const cadetName = `${founder.houseName || 'House'}-${estate.name.split(' ')[0]}`;
+    const cadet: CadetHouse = {
+      name: cadetName,
+      parentDynasty: founder.houseName || 'Ironcrown',
+      founderId: founder.id,
+      prestige: (founder.prestige || 100) * 0.8,
+    };
+
+    w.cadetHouses[cadetName] = cadet;
+    founder.houseName = cadetName;
+
+    w.history.unshift({
+      id: `hist_cadet_${cadetName}_${Date.now() % 10000}`,
+      year: w.currentYear,
+      title: `Cadet Branch Founded: ${cadetName}`,
+      category: 'Dynastic Drama',
+      description: `${founder.name} has split from the parent dynasty to establish ${cadetName} with its own heraldic colors and seat at ${estate.name}!`,
+      primaryActorId: founder.id,
+      realmId: founder.realmId,
+    });
+
+    return cadet;
+  }
+
+  static declareFeud(houseAName: string, houseBName: string, reason: string, w: WorldState): void {
+    if (!w.cadetHouses) w.cadetHouses = {};
+    const houseA = w.cadetHouses[houseAName];
+    if (houseA) {
+      houseA.feudTargetDynasty = houseBName;
+      houseA.feudReason = reason;
+    }
+
+    w.history.unshift({
+      id: `hist_feud_${Date.now() % 10000}`,
+      year: w.currentYear,
+      title: `Blood Feud Sworn: ${houseAName} vs ${houseBName}`,
+      category: 'Dynastic Drama',
+      description: `House ${houseAName} has sworn an eternal Dynastic Vendetta against ${houseBName} over ${reason}! Daggers are drawn across all halls.`,
+    });
+  }
+}
+
+// ============================================
+// 8. JUSTICE & COURT TRIALS
+// ============================================
+
+export class JusticeEngine {
+  static accuse(
+    accuser: Character,
+    accused: Character,
+    crime: CrimeType,
+    w: WorldState
+  ): { convicted: boolean; punishment?: PunishmentType; summary: string } {
+    if (!accused.crimes) accused.crimes = [];
+    accused.crimes.push({
+      crimeType: crime,
+      perpetratorId: accused.id,
+      victimId: accuser.id,
+      evidenceStrength: 0.85,
+      monthRecorded: w.month || 0,
+      discoveredById: accuser.id,
+    });
+
+    const judgeId = w.monarchId || w.characters[0]?.id;
+    if (w.favors) {
+      const debtIdx = w.favors.findIndex(
+        (f) => f.creditorId === accused.id && f.debtorId === judgeId
+      );
+      if (debtIdx >= 0) {
+        w.favors.splice(debtIdx, 1);
+        const summary = `PARDON: ${accused.name} cashed in an ancient debt over the Crown, forcing all charges of ${crime} to be dismissed!`;
+        w.history.unshift({
+          id: `hist_pardon_${Date.now() % 10000}`,
+          year: w.currentYear,
+          title: `Royal Pardon: ${accused.name}`,
+          category: 'Dynastic Drama',
+          description: summary,
+          primaryActorId: accused.id,
+          realmId: accused.realmId,
+        });
+        return { convicted: false, summary };
+      }
+    }
+
+    let gravitasShield = computeTotalGravitas(
+      accused.organicGravitas || {
+        militaryAutonomy: 300,
+        economicExtraction: 100,
+        populistLoyalty: 100,
+        lineagePrestige: 100,
+        sovereignDebtHeld: 0,
+      }
+    ) / 4000.0;
+    if (w.realmLaws?.justice === 'Noble Immunity') gravitasShield *= 2.0;
+
+    let odds = 0.7 - gravitasShield;
+    if (w.realmLaws?.justice === 'Draconian') odds += 0.25;
+
+    if (Math.random() < odds) {
+      let punishment: PunishmentType = 'Dungeon';
+      if (crime === 'Treason' || crime === 'Kingsblood' || crime === 'Murder') {
+        punishment = 'Execution';
+      } else if (crime === 'Heresy' || crime === 'Adultery') {
+        punishment = 'Monastery';
+      } else if (crime === 'Embezzlement' || crime === 'Tax Evasion') {
+        punishment = 'Fine';
+      } else if (crime === 'Refuse Levy' || crime === 'Plot Against Liege') {
+        punishment = 'Revocation';
+      }
+
+      JusticeEngine.applySentence(accused, punishment, w);
+      const summary = `CONVICTED: ${accused.name} was found guilty of ${crime} and sentenced to ${punishment}!`;
+
+      w.history.unshift({
+        id: `hist_conviction_${Date.now() % 10000}`,
+        year: w.currentYear,
+        title: `Royal Judgement: ${accused.name}`,
+        category: 'Dynastic Drama',
+        description: summary,
+        primaryActorId: accused.id,
+        realmId: accused.realmId,
+      });
+
+      return { convicted: true, punishment, summary };
+    } else {
+      const summary = `ACQUITTAL: ${accused.name} leveraged noble immunity and court influence to escape all charges of ${crime}.`;
+      accused.paranoia = Math.min(100, (accused.paranoia || 10) + 20);
+
+      w.history.unshift({
+        id: `hist_acquit_${Date.now() % 10000}`,
+        year: w.currentYear,
+        title: `Trial Acquittal: ${accused.name}`,
+        category: 'Dynastic Drama',
+        description: summary,
+        primaryActorId: accused.id,
+        realmId: accused.realmId,
+      });
+
+      return { convicted: false, summary };
+    }
+  }
+
+  static applySentence(accused: Character, p: PunishmentType, w: WorldState): void {
+    if (p === 'Execution') {
+      accused.isAlive = false;
+    } else if (p === 'Mutilation') {
+      const traits = accused.v17Traits || accused.personalityTraits || [];
+      const injury = Math.random() < 0.5 ? 'Maimed' : 'Blinded';
+      if (!traits.includes(injury)) traits.push(injury);
+      accused.v17Traits = traits;
+      accused.stress = Math.min(300, accused.stress + 60);
+    } else if (p === 'Revocation') {
+      if (w.holdings) {
+        for (const h of w.holdings) {
+          if (h.ownerId === accused.id) {
+            h.ownerId = w.monarchId || accused.liegeId || '';
+          }
+        }
+      }
+    } else if (p === 'Banishment') {
+      accused.isBanished = true;
+      if (accused.courtPosition) accused.courtPosition.orbit = 'NONE';
+      const traits = accused.v17Traits || accused.personalityTraits || [];
+      if (!traits.includes('Exiled')) traits.push('Exiled');
+      accused.v17Traits = traits;
+    } else if (p === 'Dungeon') {
+      accused.isImprisoned = true;
+      if (accused.courtPosition) accused.courtPosition.orbit = 'NONE';
+      const traits = accused.v17Traits || accused.personalityTraits || [];
+      if (!traits.includes('Imprisoned')) traits.push('Imprisoned');
+      accused.v17Traits = traits;
+    } else if (p === 'Monastery') {
+      accused.isMonk = true;
+      if (accused.courtPosition) accused.courtPosition.orbit = 'NONE';
+    } else if (p === 'Fine') {
+      const fine = Math.min(accused.treasury || 100, 100);
+      accused.treasury = Math.max(0, (accused.treasury || 0) - fine);
+    }
+  }
+}
+
+// ============================================
+// 9. AUTONOMOUS AI BRAIN & FACTIONS
+// ============================================
+
+export class AutonomousAIBrain {
+  static act(c: Character, w: WorldState): void {
+    if (!c.isAlive || c.isMonk || c.id === w.monarchId) return;
+
+    // 1. Self-Ransom from Dungeons
+    if (c.isImprisoned) {
+      if ((c.treasury || 0) >= 80) {
+        const captorId = c.liegeId || w.monarchId;
+        const captor = w.characters.find(x => x.id === captorId);
+        if (captor && captor.id !== c.id) {
+          c.treasury = (c.treasury || 0) - 80;
+          captor.treasury = (captor.treasury || 0) + 80;
+          c.isImprisoned = false;
+          if (c.v17Traits) c.v17Traits = c.v17Traits.filter(t => t !== 'Imprisoned');
+          w.history.unshift({
+            id: `hist_ransom_${c.id}_${Date.now() % 10000}`,
+            year: w.currentYear,
+            title: `Ransom Paid: ${c.name}`,
+            category: 'Dynastic Drama',
+            description: `${c.name} paid an 80g ransom to ${captor.name} for freedom!`,
+            primaryActorId: c.id,
+            realmId: c.realmId,
+          });
+        }
+      }
+      return;
+    }
+
+    // 2. Emergency Bastard Legitimization
+    const kids = (c.children || []).map(id => w.characters.find(k => k.id === id)).filter(Boolean) as Character[];
+    const legitKids = kids.filter(k => !(k.v17Traits || []).includes('Bastard') && !k.isMonk && k.isAlive);
+    if (legitKids.length === 0 && (c.age > 45)) {
+      const bastards = kids.filter(k => (k.v17Traits || []).includes('Bastard') && k.isAlive);
+      if (bastards.length > 0) {
+        const chosen = bastards[0];
+        chosen.v17Traits = (chosen.v17Traits || []).filter(t => t !== 'Bastard');
+        chosen.v17Traits.push('Legitimized_Bastard');
+        chosen.role = 'Crown Heir';
+        c.stress = Math.min(300, c.stress + 15);
+        w.history.unshift({
+          id: `hist_legit_${chosen.id}_${Date.now() % 10000}`,
+          year: w.currentYear,
+          title: `Dynastic Legitimization: ${chosen.name}`,
+          category: 'Dynastic Drama',
+          description: `Facing extinction of their line, ${c.name} issued a royal decree legitimizing ${chosen.name} as heir!`,
+          primaryActorId: c.id,
+          secondaryActorId: chosen.id,
+          realmId: c.realmId,
+        });
+      }
+    }
+
+    // 3. Proactive Guardianship & Fostering (Kids 6-16)
+    for (const kidId of (c.children || [])) {
+      const kid = w.characters.find(k => k.id === kidId);
+      if (kid && kid.age >= 6 && kid.age < 16 && !kid.guardianId) {
+        const potentialGuardians = w.characters.filter(x => x.age >= 25 && !x.isImprisoned && !x.isMonk && x.id !== kid.id);
+        if (potentialGuardians.length > 0) {
+          const mentor = potentialGuardians[Math.floor(Math.random() * potentialGuardians.length)];
+          kid.guardianId = mentor.id;
+        }
+      }
+    }
+
+    // 4. Assassination Conspiracies
+    const cTraits = c.v17Traits || c.personalityTraits || [];
+    const intrigueStat = getCharacterV17Stat(c, 'INTRIGUE', w);
+    if (intrigueStat >= 12 && (c.ambitionScore || 0) > 65 && Math.random() < 0.08) {
+      const rivals = w.characters.filter(x => x.id !== c.id && x.isAlive && !x.isMonk && x.id !== c.trueLoveId && x.id !== c.spouseId);
+      if (rivals.length > 0) {
+        const target = rivals[Math.floor(Math.random() * rivals.length)];
+        const isRoyal = target.id === w.monarchId;
+        const crimeType: CrimeType = isRoyal ? 'Kingsblood' : 'Murder';
+
+        const rollAtk = intrigueStat * (0.8 + Math.random() * 0.6);
+        const rollDef = (getCharacterV17Stat(target, 'INTRIGUE', w) + 5) * (0.8 + Math.random() * 0.6);
+
+        if (rollAtk > rollDef) {
+          target.isAlive = false;
+          w.history.unshift({
+            id: `hist_assassin_${target.id}_${Date.now() % 10000}`,
+            year: w.currentYear,
+            title: `Assassination: ${target.name}`,
+            category: 'Assassination',
+            description: `Shadows strike in the dead of night! ${target.name} was assassinated in their bedchamber!`,
+            secondaryActorId: target.id,
+            realmId: target.realmId,
+          });
+
+          if (Math.random() < 0.40) {
+            const monarch = w.characters.find(x => x.id === w.monarchId);
+            if (monarch && monarch.id !== c.id) {
+              JusticeEngine.accuse(monarch, c, crimeType, w);
+            }
+          }
+          return;
+        } else {
+          const targetTraits = target.v17Traits || target.personalityTraits || [];
+          if (!targetTraits.includes('Survived_Assassination')) {
+            targetTraits.push('Survived_Assassination');
+            target.v17Traits = targetTraits;
+          }
+          if (Math.random() < 0.60) {
+            if (!target.grudges) target.grudges = [];
+            target.grudges.push({ reason: 'Tried to Murder Me', value: -100, months: 600 });
+            JusticeEngine.accuse(target, c, crimeType, w);
+          }
+        }
+      }
+    }
+
+    // 5. Embezzlement by Greedy Councilors
+    if (cTraits.includes('Greedy') && c.courtPosition?.orbit !== 'NONE' && Math.random() < 0.06) {
+      const monarch = w.characters.find(x => x.id === w.monarchId);
+      if (monarch) {
+        const stolen = Math.min(monarch.treasury || 100, 60);
+        monarch.treasury = (monarch.treasury || 100) - stolen;
+        c.treasury = (c.treasury || 100) + stolen;
+        if (Math.random() < 0.50) {
+          JusticeEngine.accuse(monarch, c, 'Embezzlement', w);
+        }
+      }
+    }
+
+    // 6. Factions & Rebellion Coalitions
+    if ((c.loyalty || 50) < 40 && (c.ambitionScore || 0) > 50 && Math.random() < 0.08) {
+      if (!w.factions) w.factions = [];
+      let faction = w.factions.find(f => f.members.includes(c.id) || f.leaderId === c.id);
+      if (!faction) {
+        faction = {
+          id: `fact_${Date.now() % 10000}`,
+          leaderId: c.id,
+          name: 'The Liberty League',
+          members: [c.id],
+          ultimatumIssued: false,
+        };
+        w.factions.push(faction);
+      } else if (faction.leaderId === c.id) {
+        // Recruit discontented lords
+        const potentialMembers = w.characters.filter(x => !faction!.members.includes(x.id) && x.id !== w.monarchId && (x.loyalty || 50) < 45);
+        if (potentialMembers.length > 0) {
+          faction.members.push(potentialMembers[0].id);
+        }
+      }
+
+      // Check Ultimatum
+      const factionLevies = faction.members.reduce((acc, mid) => {
+        const noble = w.characters.find(x => x.id === mid);
+        return acc + (noble?.organicGravitas?.militaryAutonomy || 200) + (noble?.menAtArms || 50) * 3;
+      }, 0);
+
+      const monarch = w.characters.find(x => x.id === w.monarchId);
+      const crownLevies = (monarch?.organicGravitas?.militaryAutonomy || 300) + (monarch?.menAtArms || 100) * 3;
+
+      if (factionLevies > crownLevies * 0.85 && !faction.ultimatumIssued) {
+        faction.ultimatumIssued = true;
+        w.history.unshift({
+          id: `hist_ultimatum_${faction.id}`,
+          year: w.currentYear,
+          title: `Ultimatum: ${faction.name}`,
+          category: 'Dynastic Drama',
+          description: `The ${faction.name} coalition has massed its armies and issued an ultimatum to the Crown demanding autonomous liberties!`,
+          realmId: c.realmId,
+        });
+
+        if (monarch && ((monarch.v17Traits || []).includes('Craven') || (w.hegemony || 1) < 0.75)) {
+          // Monarch yields
+          if (w.realmLaws) {
+            w.realmLaws.authority = 'Autonomous';
+          }
+          w.factions = w.factions.filter(f => f.id !== faction!.id);
+        } else {
+          // Monarch refuses -> Civil War!
+          w.realmState = 'Civil War';
+        }
+      }
+    }
+  }
+}
+
+// ============================================
+// 10. CIVIL WAR & FOREIGN INVASIONS
+// ============================================
+
+export class CivilWarEngine {
+  static resolve(w: WorldState): void {
+    const monarch = w.characters.find(c => c.id === w.monarchId);
+    const activeFaction = (w.factions || []).find(f => f.ultimatumIssued);
+    if (!monarch || !activeFaction) {
+      w.realmState = 'Balanced Feudalism';
+      return;
+    }
+
+    const rebelMembers = activeFaction.members.map(mid => w.characters.find(c => c.id === mid)).filter(Boolean) as Character[];
+    if (rebelMembers.length === 0) {
+      w.factions = (w.factions || []).filter(f => f.id !== activeFaction.id);
+      w.realmState = 'Balanced Feudalism';
+      return;
+    }
+
+    const rebelLevies = rebelMembers.reduce((acc, m) => acc + (m.organicGravitas?.militaryAutonomy || 200) + (m.menAtArms || 50) * 3, 0);
+    const monarchLevies = (monarch.organicGravitas?.militaryAutonomy || 300) + (monarch.menAtArms || 100) * 3;
+
+    const rebelPower = rebelLevies * (0.8 + Math.random() * 0.4);
+    const crownPower = monarchLevies * (0.8 + Math.random() * 0.4);
+
+    if (rebelPower > crownPower) {
+      // Rebels win!
+      if (w.realmLaws) w.realmLaws.authority = 'Autonomous';
+      w.realmState = 'Fragmentation';
+      w.history.unshift({
+        id: `hist_cw_win_${Date.now() % 10000}`,
+        year: w.currentYear,
+        title: `Civil War: The Crown Falls!`,
+        category: 'War & Conquest',
+        description: `The coalition shattered the royal host! Crown authority was broken down to Autonomous liberties.`,
+        realmId: monarch.realmId,
+      });
+    } else {
+      // Crown wins!
+      w.realmState = 'Absolute Autocracy';
+      for (const rebel of rebelMembers) {
+        rebel.isImprisoned = true;
+        if (!rebel.v17Traits) rebel.v17Traits = [];
+        if (!rebel.v17Traits.includes('Imprisoned')) rebel.v17Traits.push('Imprisoned');
+      }
+      w.history.unshift({
+        id: `hist_cw_crushed_${Date.now() % 10000}`,
+        year: w.currentYear,
+        title: `Civil War: Rebellion Crushed!`,
+        category: 'War & Conquest',
+        description: `The royal legions smashed the rebel coalition! All traitorous lords were cast into chains and dungeons.`,
+        realmId: monarch.realmId,
+      });
+    }
+
+    w.factions = (w.factions || []).filter(f => f.id !== activeFaction.id);
+  }
+}
+
+export class ForeignInvasionEngine {
+  static step(w: WorldState): void {
+    const monarch = w.characters.find(c => c.id === w.monarchId);
+    if (!monarch || !w.foreignNations) return;
+
+    for (const nation of w.foreignNations) {
+      if (nation.truceMonths > 0) {
+        nation.truceMonths -= 1;
+        continue;
+      }
+
+      if (Math.random() < (nation.threatLevel / 100.0) * 0.08) {
+        w.realmState = 'Foreign Invasion';
+        const realmLevies = w.characters.reduce((acc, c) => acc + (c.organicGravitas?.militaryAutonomy || 200) + (c.menAtArms || 50) * 3, 0);
+        const invaderPower = nation.militaryStrength * (0.85 + Math.random() * 0.3);
+
+        if (realmLevies >= invaderPower) {
+          monarch.treasury = (monarch.treasury || 100) + 200;
+          monarch.prestige = (monarch.prestige || 100) + 150;
+          nation.truceMonths = 36;
+          w.realmState = 'Balanced Feudalism';
+          w.history.unshift({
+            id: `hist_inv_win_${Date.now() % 10000}`,
+            year: w.currentYear,
+            title: `Invasion Repelled: ${nation.name}`,
+            category: 'War & Conquest',
+            description: `The banners of the united realm drove the ${nation.name} host into the sea! Plunder and glory were won.`,
+            realmId: monarch.realmId,
+          });
+        } else {
+          monarch.treasury = Math.max(0, (monarch.treasury || 100) - 200);
+          monarch.stress = Math.min(300, monarch.stress + 45);
+          nation.truceMonths = 36;
+          w.realmState = 'Fragmentation';
+          w.history.unshift({
+            id: `hist_inv_defeat_${Date.now() % 10000}`,
+            year: w.currentYear,
+            title: `Devastation: ${nation.name} Invades!`,
+            category: 'War & Conquest',
+            description: `The ${nation.name} broke the border defenses, sacking border towns and forcing humiliating reparations.`,
+            realmId: monarch.realmId,
+          });
+        }
+      }
+    }
+  }
+}
+
+// ============================================
+// 11. WORLD INITIALIZATION & MONTHLY STEP
+// ============================================
+
+export function ensureV17WorldInitialized(world: WorldState): WorldState {
+  if (world.provinces && world.holdings && world.realmLaws) {
+    return world;
+  }
+
+  const w = JSON.parse(JSON.stringify(world)) as WorldState;
+  w.month = w.month || 1;
+  w.hegemony = w.hegemony || 1.15;
+  w.realmState = w.realmState || 'Balanced Feudalism';
+  w.lockedDownProvinces = w.lockedDownProvinces || [];
+  w.epidemics = w.epidemics || [];
+  w.cadetHouses = w.cadetHouses || {};
+  w.factions = w.factions || [];
+  w.favors = w.favors || [];
+  w.armies = w.armies || [];
+
+  w.foreignNations = w.foreignNations || [
+    { name: 'Valyrian Empire', militaryStrength: 1500, threatLevel: 25, truceMonths: 0 },
+    { name: 'Iron Steppe Nomads', militaryStrength: 1000, threatLevel: 40, truceMonths: 0 },
+  ];
+
+  w.realmLaws = w.realmLaws || {
+    succession: 'Partition',
+    gender: 'Agnatic-Cognatic',
+    authority: 'Limited',
+    justice: 'Traditional',
+  };
+
+  const provinces: Province[] = [];
+  const holdings: Holding[] = [];
+
+  let provCounter = 1;
+  for (const c of w.counties) {
+    const countyCells = w.cells.filter((cell) => cell.countyId === c.id || c.cellIndices.includes(cell.index));
+    const avgElev = countyCells.reduce((acc, cell) => acc + cell.elevation, 0) / (countyCells.length || 1);
+    const hasCoast = countyCells.some((cell) => cell.isCoast);
+    const hasForest = countyCells.some((cell) => cell.reliefType === 'forest');
+
+    let terrain: TerrainType = 'Plains';
+    if (avgElev > 0.65) terrain = 'Mountains';
+    else if (hasCoast) terrain = 'Coastal';
+    else if (hasForest) terrain = 'Forest';
+
+    const capitalBurg = w.burgs.find((b) => b.id === c.capitalBurgId) || w.burgs[0];
+
+    const prov: Province = {
+      id: `prov_${provCounter++}`,
+      name: c.name,
+      realmId: c.realmId,
+      terrain,
+      neighbors: [],
+      holdingIds: [],
+      cellIndices: c.cellIndices,
+      capitalX: capitalBurg ? capitalBurg.x : 500,
+      capitalY: capitalBurg ? capitalBurg.y : 350,
+      isQuarantined: false,
+    };
+    provinces.push(prov);
+  }
+
+  for (let i = 0; i < provinces.length; i++) {
+    for (let j = i + 1; j < provinces.length; j++) {
+      const p1 = provinces[i];
+      const p2 = provinces[j];
+      const dist = Math.hypot(p1.capitalX - p2.capitalX, p1.capitalY - p2.capitalY);
+      if (dist < 320) {
+        p1.neighbors.push(p2.id);
+        p2.neighbors.push(p1.id);
+      }
+    }
+  }
+
+  let holdingCounter = 1;
+  const estateTypes: EstateType[] = ['Castle', 'City', 'Temple'];
+  for (let i = 0; i < provinces.length; i++) {
+    const prov = provinces[i];
+    const estateType = estateTypes[i % 3];
+    const owner = w.characters[i % w.characters.length] || w.characters[0];
+
+    const h: Holding = {
+      id: `holding_${holdingCounter++}`,
+      name: `${prov.name} ${estateType}`,
+      estateType,
+      provinceId: prov.id,
+      baseTax: estateType === 'City' ? 35 : estateType === 'Temple' ? 18 : 12,
+      baseLevy: estateType === 'Castle' ? 500 : estateType === 'City' ? 180 : 220,
+      dev: 25 + (i % 15),
+      adminOverhead: 10,
+      ownerId: owner?.id || 'char_1',
+    };
+    holdings.push(h);
+    prov.holdingIds.push(h.id);
+  }
+
+  w.provinces = provinces;
+  w.holdings = holdings;
+
+  const realm1 = w.realms[0];
+  const capBurg = w.burgs.find((b) => b.id === realm1?.capitalBurgId);
+  const capProv = provinces.find((p) => p.capitalX === capBurg?.x) || provinces[0];
+  w.capitalProvinceId = capProv?.id || provinces[0]?.id;
+  w.monarchId = realm1?.rulerId || w.characters[0]?.id;
+
+  for (let idx = 0; idx < w.characters.length; idx++) {
+    const char = w.characters[idx];
+    const prov = provinces[idx % provinces.length];
+    char.provinceId = prov.id;
+    char.isTraveling = false;
+    char.travelMonthsLeft = 0;
+    char.travelPurpose = '';
+    char.menAtArms = 50 + (idx % 4) * 25;
+    char.treasury = 100 + (idx % 5) * 40;
+    char.loyalty = 50 + (idx % 4) * 10;
+    char.ambitionScore = 30 + (idx % 6) * 12;
+    char.paranoia = 15 + (idx % 3) * 15;
+    char.contentment = 60;
+    char.psychState = 'Normal';
+    char.vassalIds = [];
+    char.crimes = [];
+    char.grudges = [];
+
+    const v17Traits: string[] = [];
+    for (const t of char.personalityTraits) {
+      if (V17_TRAIT_DB[t]) v17Traits.push(t);
+    }
+    if (char.congenitalTraits?.includes('Genius')) v17Traits.push('Genius');
+    if (char.congenitalTraits?.includes('Beautiful')) v17Traits.push('Beautiful');
+    if (char.congenitalTraits?.includes('Giant')) v17Traits.push('Giant');
+    if (char.congenitalTraits?.includes('Robust')) v17Traits.push('Robust');
+    if (v17Traits.length === 0) v17Traits.push('Just', 'Brave');
+    char.v17Traits = v17Traits;
+
+    const orbitRing: AccessLevel =
+      char.id === w.monarchId
+        ? 'INNER_RING'
+        : idx < 4
+        ? 'INNER_RING'
+        : idx < 8
+        ? 'MIDDLE_RING'
+        : 'OUTER_RING';
+    char.courtPosition = {
+      orbit: orbitRing,
+      capitalSecrets: 10 + (idx % 5) * 5,
+      capitalBottlenecks: 15,
+      capitalFavors: 10,
+      decayPressure: 0,
+    };
+
+    char.organicGravitas = {
+      militaryAutonomy: 250 + (idx % 5) * 80,
+      economicExtraction: 40 + (idx % 4) * 15,
+      populistLoyalty: 120 + (idx % 3) * 50,
+      lineagePrestige: char.prestige || 100,
+      sovereignDebtHeld: idx === 2 ? 100 : 0,
+    };
+
+    char.claims = [];
+    if (idx === 1 && holdings[0]) {
+      char.claims.push({
+        holdingId: holdings[0].id,
+        claimantId: char.id,
+        isPressed: true,
+        isStrong: true,
+      });
+    }
+  }
+
+  if (w.characters.length >= 2) {
+    w.favors.push({
+      id: `favor_init_1`,
+      debtorId: w.monarchId || w.characters[0].id,
+      creditorId: w.characters[1].id,
+      value: 100,
+      origin: 'Ancient Dynastic Blood Debt',
+      isDynastyLevel: true,
+      ageInYears: 12,
+    });
+  }
+
+  return w;
+}
+
+export function advanceV17GrandStrategyStep(world: WorldState): WorldState {
+  const w = ensureV17WorldInitialized(world);
+  w.month = (w.month || 0) + 1;
+
+  // 1. Geography & Spatial Travel
+  GeographyAndTravelEngine.step(w);
+
+  // 2. Plague & Quarantines
+  PlagueEngine.step(w);
+
+  // 3. Marching Armies & Sieges
+  ClaimAndWarEngine.stepArmies(w);
+
+  // 4. Lust, Dynasty & Pregnancies
+  for (const c of w.characters) {
+    if (c.isAlive) {
+      LustAndDynastyEngine.process(c, w);
+    }
+  }
+
+  // 5. Autonomous AI Brain (Assassinations, Embezzlement, Factions, Ransoms)
+  for (const c of w.characters) {
+    if (c.isAlive) {
+      AutonomousAIBrain.act(c, w);
+    }
+  }
+
+  // 6. Civil War Resolution
+  if (w.realmState === 'Civil War') {
+    CivilWarEngine.resolve(w);
+  }
+
+  // 7. Foreign Invasions
+  ForeignInvasionEngine.step(w);
+
+  // 8. Sovereign Hegemony Check
+  const crownHoldings = (w.holdings || []).filter(h => h.ownerId === w.monarchId);
+  const crownLevies = crownHoldings.reduce((acc, h) => acc + getHoldingYields(h).levy, 200);
+  const nobleLevies = (w.holdings || [])
+    .filter(h => h.ownerId !== w.monarchId)
+    .reduce((acc, h) => acc + getHoldingYields(h).levy, 200);
+
+  w.hegemony = crownLevies / Math.max(1, nobleLevies * 0.7);
+  if (w.realmState !== 'Civil War' && w.realmState !== 'Foreign Invasion') {
+    if (w.hegemony >= 1.5) w.realmState = 'Absolute Autocracy';
+    else if (w.hegemony >= 0.75) w.realmState = 'Balanced Feudalism';
+    else w.realmState = 'Fragmentation';
+  }
+
+  return w;
+}
+--- END OF FILE src/engine/v17GrandStrategyEngine.ts ---

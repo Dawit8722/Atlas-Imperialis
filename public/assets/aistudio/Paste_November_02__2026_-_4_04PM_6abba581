@@ -1,0 +1,750 @@
+import React, { useState, useMemo } from 'react';
+import { Realm, Character, Burg, County, WorldState, HistoricalEvent } from '../types/world';
+import {
+  BookOpen,
+  Feather,
+  Skull,
+  Eye,
+  Heart,
+  Shield,
+  Crown,
+  Flame,
+  Key,
+  Award,
+  Sparkles,
+  Zap,
+  Swords,
+  Search,
+  Users,
+  Compass,
+  Lock,
+  ChevronDown,
+  ChevronUp,
+  Coins,
+  Navigation,
+  Anchor,
+  Scale,
+  TrendingUp,
+  TrendingDown,
+  Landmark,
+  Percent,
+  AlertTriangle,
+  ArrowUpRight,
+  ArrowDownRight,
+  Building2,
+  ChevronLeft,
+  ChevronRight as ChevronRightIcon,
+  X,
+} from 'lucide-react';
+import { CK3_TRAITS, computeCharacterStats } from '../engine/fantasyTables';
+import { CK3EventModal } from './CK3EventModal';
+import { V17GrandStrategyPanels } from './V17GrandStrategyPanels';
+import { computeTotalGravitas, PlayerActionEngine } from '../engine/v17GrandStrategyEngine';
+import { motion, AnimatePresence } from 'motion/react';
+import { CommodityType } from '../types/economy';
+import { takeBankLoan, debaseCurrency } from '../engine/economyEngine';
+
+export type MasterDomain = 'court' | 'war' | 'economy' | 'fief' | 'laws';
+
+interface CourtDossierProps {
+  world: WorldState;
+  selectedRealm?: Realm;
+  selectedBurg?: Burg;
+  selectedCounty?: County;
+  onSelectCharacter: (char: Character) => void;
+  onSelectRealm: (realm: Realm) => void;
+  onSelectBurg: (burg: Burg) => void;
+  onSelectCounty?: (county: County) => void;
+  onOpenCompendiumForEntity: (entityId: string) => void;
+  onWeaveStoryForCharacter?: (char: Character) => void;
+  onUpdateWorld?: (newWorld: WorldState) => void;
+}
+
+export const CourtDossier: React.FC<CourtDossierProps> = ({
+  world,
+  selectedRealm,
+  selectedBurg,
+  selectedCounty,
+  onSelectCharacter,
+  onSelectRealm,
+  onSelectBurg,
+  onSelectCounty,
+  onOpenCompendiumForEntity,
+  onWeaveStoryForCharacter,
+  onUpdateWorld,
+}) => {
+  // Master Domain Pillars (Eliminating the 15-tab chaos!)
+  const [masterDomain, setMasterDomain] = useState<MasterDomain>('court');
+  const [subTab, setSubTab] = useState<string>('tree');
+  const [isCollapsed, setIsCollapsed] = useState(false);
+
+  const [inspectedCharId, setInspectedCharId] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [isEventModalOpen, setIsEventModalOpen] = useState(false);
+  const [notificationMsg, setNotificationMsg] = useState<string | null>(null);
+
+  const realm = selectedRealm || world.realms[0];
+  const ruler = world.characters.find((c) => c.id === realm?.rulerId) || world.characters[0];
+  const capital = world.burgs.find((b) => b.id === realm?.capitalBurgId);
+  const burg = selectedBurg || capital;
+  const county = selectedCounty || (burg ? world.counties.find((c) => c.id === burg.countyId) : undefined);
+  const countyRuler = county ? world.characters.find((c) => c.id === county.rulerId) : undefined;
+
+  const realmChars = useMemo(() => world.characters.filter((c) => c.realmId === realm?.id), [world.characters, realm]);
+  const activeChar = useMemo(() => {
+    if (inspectedCharId) {
+      return world.characters.find((c) => c.id === inspectedCharId) || ruler;
+    }
+    return ruler;
+  }, [inspectedCharId, world.characters, ruler]);
+
+  const spouse = activeChar?.spouseId ? world.characters.find((c) => c.id === activeChar.spouseId) : undefined;
+  const heir = activeChar?.heirId ? world.characters.find((c) => c.id === activeChar.heirId) : undefined;
+  const rival = activeChar?.rivalId ? world.characters.find((c) => c.id === activeChar.rivalId) : undefined;
+  const lover = activeChar?.loverId ? world.characters.find((c) => c.id === activeChar.loverId) : undefined;
+
+  const currentBurgMarket = burg && world.economy ? world.economy.burgMarkets[burg.id] : undefined;
+  const activeFiscalProfile = activeChar && world.economy ? world.economy.fiscalProfiles[activeChar.id] : undefined;
+  const realmPurity = realm && world.economy ? (world.economy.realmCoinPurity[realm.id] || 1.0) : 1.0;
+
+  const dynastyMembers = useMemo(() => realmChars.filter((c) =>
+    ['Monarch', 'Consort', 'Crown Heir', 'Cadet Prince', 'Cadet Princess', 'Legitimated Bastard', 'Disinherited Bastard', 'Dowager Regent', 'Royal Uncle'].includes(c.role)
+  ), [realmChars]);
+
+  const councilMembers = useMemo(() => realmChars.filter((c) =>
+    ['Chancellor', 'Marshal', 'Steward', 'Spymaster', 'Court Chaplain'].includes(c.role)
+  ), [realmChars]);
+
+  const dignitaries = useMemo(() => realmChars.filter((c) =>
+    ['Court Champion', 'Court Physician', 'Court Antiquarian', 'Grand Equerry', 'Royal Cupbearer', 'High Inquisitor', 'Court Jester'].includes(c.role)
+  ), [realmChars]);
+
+  const vassals = useMemo(() => realmChars.filter((c) =>
+    ['Vassal Duke', 'Vassal Count', 'Vassal Consort', 'Vassal Heir'].includes(c.role)
+  ), [realmChars]);
+
+  const prisoners = useMemo(() => realmChars.filter((c) =>
+    ['Dungeon Prisoner', 'Exiled Claimant'].includes(c.role)
+  ), [realmChars]);
+
+  const filteredRoster = useMemo(() => {
+    if (!searchQuery.trim()) return realmChars;
+    const q = searchQuery.toLowerCase();
+    return realmChars.filter(
+      (c) =>
+        c.name.toLowerCase().includes(q) ||
+        c.title.toLowerCase().includes(q) ||
+        c.role.toLowerCase().includes(q)
+    );
+  }, [realmChars, searchQuery]);
+
+  if (!realm || !ruler) return null;
+
+  return (
+    <>
+      {/* Collapsed Toggle Button */}
+      {isCollapsed && (
+        <button
+          onClick={() => setIsCollapsed(false)}
+          className="fixed right-4 top-20 z-30 p-2.5 glass-panel rounded-full hover:border-amber-400 text-amber-300 shadow-2xl cursor-pointer"
+          title="Open Feudal Court Dossier"
+        >
+          <ChevronLeft className="w-4 h-4" />
+        </button>
+      )}
+
+      <AnimatePresence>
+        {!isCollapsed && (
+          <motion.aside
+            initial={{ x: '100%' }}
+            animate={{ x: 0 }}
+            exit={{ x: '100%' }}
+            transition={{ type: 'spring', stiffness: 320, damping: 32 }}
+            className="fixed right-4 top-18 bottom-20 w-96 flex flex-col glass-panel rounded-2xl overflow-hidden shadow-2xl z-30 text-xs"
+          >
+            {/* Header: Heraldic Crest & Sovereign Realm */}
+            <div className="p-4 border-b border-stone-800/80 bg-stone-950/40 flex items-center justify-between">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <span
+                  className="w-10 h-10 rounded-xl flex items-center justify-center text-xl shadow-md border border-stone-700/80 shrink-0 font-serif"
+                  style={{ backgroundColor: realm.heraldry.bg, color: realm.heraldry.fg }}
+                >
+                  {realm.heraldry.symbol}
+                </span>
+                <div className="min-w-0">
+                  <h2 className="font-cinzel font-bold text-sm text-amber-100 truncate">
+                    {realm.name}
+                  </h2>
+                  <div className="text-[10px] text-stone-400 truncate flex items-center gap-1">
+                    <span>{realm.culture}</span>
+                    <span className="text-stone-600">·</span>
+                    <span className="text-amber-400/90 font-medium">{realm.religion}</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => onOpenCompendiumForEntity(`lore_${realm.id}`)}
+                  className="p-1.5 hover:bg-stone-800/60 rounded-lg text-stone-400 hover:text-amber-300 transition-colors"
+                  title="Open in Compendium"
+                >
+                  <BookOpen className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  onClick={() => setIsCollapsed(true)}
+                  className="p-1.5 hover:bg-stone-800/60 rounded-lg text-stone-400 hover:text-white transition-colors"
+                  title="Collapse Sidebar"
+                >
+                  <ChevronRightIcon className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+
+            {/* Notification Toast */}
+            {notificationMsg && (
+              <div className="px-3 py-2 bg-amber-950/80 border-b border-amber-500/40 text-amber-200 text-[11px] font-serif italic flex justify-between items-center">
+                <span>{notificationMsg}</span>
+                <button onClick={() => setNotificationMsg(null)} className="text-amber-400 hover:text-white ml-2">✕</button>
+              </div>
+            )}
+
+            {/* 5 Master Domain Pillars */}
+            <div className="grid grid-cols-5 p-1 bg-black/40 border-b border-stone-800/80 text-[10px] font-semibold text-center select-none">
+              <button
+                onClick={() => { setMasterDomain('court'); setSubTab('tree'); }}
+                className={`py-1.5 rounded-lg transition-all cursor-pointer ${
+                  masterDomain === 'court' ? 'bg-amber-600 text-white shadow-sm' : 'text-stone-400 hover:text-stone-200'
+                }`}
+              >
+                Court
+              </button>
+              <button
+                onClick={() => { setMasterDomain('economy'); setSubTab('markets'); }}
+                className={`py-1.5 rounded-lg transition-all cursor-pointer ${
+                  masterDomain === 'economy' ? 'bg-amber-600 text-white shadow-sm' : 'text-stone-400 hover:text-stone-200'
+                }`}
+              >
+                Economy
+              </button>
+              <button
+                onClick={() => { setMasterDomain('war'); setSubTab('factions'); }}
+                className={`py-1.5 rounded-lg transition-all cursor-pointer ${
+                  masterDomain === 'war' ? 'bg-amber-600 text-white shadow-sm' : 'text-stone-400 hover:text-stone-200'
+                }`}
+              >
+                War
+              </button>
+              <button
+                onClick={() => { setMasterDomain('fief'); setSubTab('citadel'); }}
+                className={`py-1.5 rounded-lg transition-all cursor-pointer ${
+                  masterDomain === 'fief' ? 'bg-amber-600 text-white shadow-sm' : 'text-stone-400 hover:text-stone-200'
+                }`}
+              >
+                Fief
+              </button>
+              <button
+                onClick={() => { setMasterDomain('laws'); setSubTab('laws'); }}
+                className={`py-1.5 rounded-lg transition-all cursor-pointer ${
+                  masterDomain === 'laws' ? 'bg-amber-600 text-white shadow-sm' : 'text-stone-400 hover:text-stone-200'
+                }`}
+              >
+                Laws
+              </button>
+            </div>
+
+            {/* Sub-Pillar Navigation Chips */}
+            <div className="flex items-center gap-1 px-3 py-1.5 bg-stone-950/40 border-b border-stone-800/60 overflow-x-auto text-[10px]">
+              {masterDomain === 'court' && (
+                <>
+                  {['tree', 'council', 'dignitaries', 'vassals', 'roster'].map((st) => (
+                    <button
+                      key={st}
+                      onClick={() => setSubTab(st)}
+                      className={`px-2 py-0.5 rounded-md capitalize transition-colors ${
+                        subTab === st ? 'bg-amber-500/20 text-amber-300 font-semibold border border-amber-500/40' : 'text-stone-400 hover:text-stone-200'
+                      }`}
+                    >
+                      {st === 'tree' ? '👑 Dynasty' : st}
+                    </button>
+                  ))}
+                </>
+              )}
+
+              {masterDomain === 'economy' && (
+                <>
+                  {['markets', 'ledger', 'banks', 'routes'].map((st) => (
+                    <button
+                      key={st}
+                      onClick={() => setSubTab(st)}
+                      className={`px-2 py-0.5 rounded-md capitalize transition-colors ${
+                        subTab === st ? 'bg-amber-500/20 text-amber-300 font-semibold border border-amber-500/40' : 'text-stone-400 hover:text-stone-200'
+                      }`}
+                    >
+                      {st}
+                    </button>
+                  ))}
+                </>
+              )}
+
+              {masterDomain === 'war' && (
+                <>
+                  {['factions', 'claims', 'feuds', 'prisoners'].map((st) => (
+                    <button
+                      key={st}
+                      onClick={() => setSubTab(st)}
+                      className={`px-2 py-0.5 rounded-md capitalize transition-colors ${
+                        subTab === st ? 'bg-amber-500/20 text-amber-300 font-semibold border border-amber-500/40' : 'text-stone-400 hover:text-stone-200'
+                      }`}
+                    >
+                      {st}
+                    </button>
+                  ))}
+                </>
+              )}
+
+              {masterDomain === 'fief' && (
+                <>
+                  {['citadel', 'county', 'travel'].map((st) => (
+                    <button
+                      key={st}
+                      onClick={() => setSubTab(st)}
+                      className={`px-2 py-0.5 rounded-md capitalize transition-colors ${
+                        subTab === st ? 'bg-amber-500/20 text-amber-300 font-semibold border border-amber-500/40' : 'text-stone-400 hover:text-stone-200'
+                      }`}
+                    >
+                      {st}
+                    </button>
+                  ))}
+                </>
+              )}
+
+              {masterDomain === 'laws' && (
+                <>
+                  {['laws', 'plague'].map((st) => (
+                    <button
+                      key={st}
+                      onClick={() => setSubTab(st)}
+                      className={`px-2 py-0.5 rounded-md capitalize transition-colors ${
+                        subTab === st ? 'bg-amber-500/20 text-amber-300 font-semibold border border-amber-500/40' : 'text-stone-400 hover:text-stone-200'
+                      }`}
+                    >
+                      {st}
+                    </button>
+                  ))}
+                </>
+              )}
+            </div>
+
+            {/* Scrollable Stage Content */}
+            <div className="flex-1 overflow-y-auto p-4 space-y-4">
+              {/* PILLAR 1: COURT (Dynasty Tree / Council / Roster) */}
+              {masterDomain === 'court' && (
+                <>
+                  {subTab === 'tree' && (
+                    <div className="flex flex-col items-center py-2 space-y-3">
+                      <div className="flex items-center gap-3">
+                        <CharacterPortraitNode
+                          char={ruler}
+                          isPrimary
+                          onClick={() => { setInspectedCharId(ruler.id); onSelectCharacter(ruler); }}
+                        />
+                        {ruler.spouseId && (
+                          <>
+                            <div className="w-4 h-0.5 bg-amber-600/60" />
+                            <CharacterPortraitNode
+                              char={world.characters.find((c) => c.id === ruler.spouseId)!}
+                              onClick={() => { setInspectedCharId(ruler.spouseId!); onSelectCharacter(world.characters.find((c) => c.id === ruler.spouseId)!); }}
+                            />
+                          </>
+                        )}
+                      </div>
+
+                      <div className="w-0.5 h-4 bg-amber-600/60" />
+
+                      <div className="flex flex-wrap justify-center gap-3 border-t border-amber-600/40 pt-3 w-full">
+                        {dynastyMembers.filter((c) => c.id !== ruler.id && c.id !== ruler.spouseId).map((child) => (
+                          <CharacterPortraitNode
+                            key={child.id}
+                            char={child}
+                            onClick={() => { setInspectedCharId(child.id); onSelectCharacter(child); }}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {subTab === 'council' && (
+                    <div className="space-y-2">
+                      <div className="text-[10px] font-bold uppercase text-stone-400 tracking-wider">Small Privy Council</div>
+                      {councilMembers.map((m) => (
+                        <CharacterListItem
+                          key={m.id}
+                          char={m}
+                          isSelected={m.id === activeChar?.id}
+                          onSelect={() => { setInspectedCharId(m.id); onSelectCharacter(m); }}
+                        />
+                      ))}
+                    </div>
+                  )}
+
+                  {subTab === 'dignitaries' && (
+                    <div className="space-y-2">
+                      <div className="text-[10px] font-bold uppercase text-stone-400 tracking-wider">Court Dignitaries</div>
+                      {dignitaries.map((m) => (
+                        <CharacterListItem
+                          key={m.id}
+                          char={m}
+                          isSelected={m.id === activeChar?.id}
+                          onSelect={() => { setInspectedCharId(m.id); onSelectCharacter(m); }}
+                        />
+                      ))}
+                    </div>
+                  )}
+
+                  {subTab === 'vassals' && (
+                    <div className="space-y-2">
+                      <div className="text-[10px] font-bold uppercase text-stone-400 tracking-wider">Sworn Vassal Lords</div>
+                      {vassals.map((m) => (
+                        <CharacterListItem
+                          key={m.id}
+                          char={m}
+                          isSelected={m.id === activeChar?.id}
+                          onSelect={() => { setInspectedCharId(m.id); onSelectCharacter(m); }}
+                        />
+                      ))}
+                    </div>
+                  )}
+
+                  {subTab === 'roster' && (
+                    <div className="space-y-2">
+                      <div className="relative">
+                        <Search className="w-3 h-3 text-stone-500 absolute left-2.5 top-2.5" />
+                        <input
+                          type="text"
+                          placeholder="Search court nobles..."
+                          value={searchQuery}
+                          onChange={(e) => setSearchQuery(e.target.value)}
+                          className="w-full pl-8 pr-3 py-1 bg-stone-950/80 border border-stone-800 rounded-lg text-stone-200"
+                        />
+                      </div>
+                      {filteredRoster.map((m) => (
+                        <CharacterListItem
+                          key={m.id}
+                          char={m}
+                          isSelected={m.id === activeChar?.id}
+                          onSelect={() => { setInspectedCharId(m.id); onSelectCharacter(m); }}
+                        />
+                      ))}
+                    </div>
+                  )}
+                </>
+              )}
+
+              {/* PILLAR 2: WAR & STATE (Factions / Claims / Feuds / Captives) */}
+              {masterDomain === 'war' && (
+                <V17GrandStrategyPanels
+                  activeTab={subTab as any}
+                  activeChar={activeChar}
+                  world={world}
+                  onUpdateWorld={(w) => onUpdateWorld?.(w)}
+                  onNotify={(msg) => { setNotificationMsg(msg); setTimeout(() => setNotificationMsg(null), 5000); }}
+                  onSelectCharacter={(c) => { setInspectedCharId(c.id); onSelectCharacter(c); }}
+                />
+              )}
+
+              {/* PILLAR 3: ECONOMY (Markets, Ledger, Banks, Routes) */}
+              {masterDomain === 'economy' && currentBurgMarket && activeFiscalProfile && (
+                <div className="space-y-3">
+                  {subTab === 'markets' && (
+                    <div className="space-y-2.5">
+                      <div className="p-3 glass-card rounded-xl flex items-center justify-between">
+                        <div>
+                          <div className="font-bold text-stone-200 text-xs">{currentBurgMarket.burgName} Market</div>
+                          <div className="text-[10px] text-stone-400">Trade Volume: <strong className="text-amber-300 font-mono">{currentBurgMarket.totalMarketVolume}g</strong></div>
+                        </div>
+                        {currentBurgMarket.isStarving && (
+                          <span className="px-2 py-0.5 rounded bg-red-950 text-red-300 font-bold text-[9px] border border-red-600 animate-pulse">
+                            FAMINE
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-1.5">
+                        {(Object.entries(currentBurgMarket.markets) as [CommodityType, any][]).map(([cType, m]) => (
+                          <div key={cType} className="p-2 glass-card rounded-lg flex justify-between items-center text-[10px]">
+                            <span className="font-medium text-stone-300">{cType}</span>
+                            <span className="font-mono font-bold text-amber-300">{m.currentPrice}g</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {subTab === 'ledger' && (
+                    <div className="p-3 glass-card rounded-xl space-y-2">
+                      <div className="flex justify-between items-center">
+                        <span className="font-bold text-stone-200">Net Monthly Cashflow:</span>
+                        <span className={`font-mono font-bold ${activeFiscalProfile.netMonthlyCashflow >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                          {activeFiscalProfile.netMonthlyCashflow > 0 ? `+${activeFiscalProfile.netMonthlyCashflow}` : activeFiscalProfile.netMonthlyCashflow}g
+                        </span>
+                      </div>
+                      <div className="text-[10px] text-stone-400 flex justify-between">
+                        <span>Revenue: +{activeFiscalProfile.totalRevenue}g</span>
+                        <span>Expenses: -{activeFiscalProfile.totalExpenses}g</span>
+                      </div>
+                    </div>
+                  )}
+
+                  {subTab === 'banks' && world.economy && (
+                    <div className="space-y-2">
+                      {world.economy.bankInstitutions.map((bank) => (
+                        <div key={bank.id} className="p-3 glass-card rounded-xl space-y-1.5">
+                          <div className="flex justify-between items-center">
+                            <span className="font-bold text-stone-200">{bank.name}</span>
+                            <span className="text-amber-300 font-mono">{Math.round(bank.baseInterestRate * 100)}% rate</span>
+                          </div>
+                          <div className="flex gap-2">
+                            <button
+                              onClick={() => {
+                                takeBankLoan(activeChar, bank.id, 150, world);
+                                onUpdateWorld?.({ ...world });
+                              }}
+                              className="flex-1 py-1 bg-amber-700/80 hover:bg-amber-600 rounded text-[10px] font-bold text-white"
+                            >
+                              Borrow 150g
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* PILLAR 4: FIEF & MARCH (Citadel, County, Travel) */}
+              {masterDomain === 'fief' && (
+                <div className="space-y-3">
+                  {subTab === 'citadel' && burg && (
+                    <div className="p-3.5 glass-card rounded-xl space-y-2">
+                      <div className="font-bold font-serif text-sm text-stone-100">{burg.name} ({burg.type})</div>
+                      <div className="text-stone-300 font-serif italic text-[11px] leading-relaxed">{burg.lore}</div>
+                      <div className="text-amber-300 font-mono pt-1">Population: {burg.population.toLocaleString()} souls</div>
+                    </div>
+                  )}
+
+                  {subTab === 'county' && county && (
+                    <div className="p-3.5 glass-card rounded-xl space-y-2">
+                      <div className="font-bold font-serif text-sm text-stone-100">{county.name}</div>
+                      <div className="text-stone-400 text-[11px]">Development Index: <strong className="text-amber-300 font-mono">{county.development}/100</strong></div>
+                      {countyRuler && <div className="text-stone-300 text-[10px]">Ruler: <strong>{countyRuler.name}</strong></div>}
+                    </div>
+                  )}
+
+                  {subTab === 'travel' && (
+                    <V17GrandStrategyPanels
+                      activeTab="travel"
+                      activeChar={activeChar}
+                      world={world}
+                      onUpdateWorld={(w) => onUpdateWorld?.(w)}
+                      onNotify={(msg) => setNotificationMsg(msg)}
+                      onSelectCharacter={(c) => { setInspectedCharId(c.id); onSelectCharacter(c); }}
+                    />
+                  )}
+                </div>
+              )}
+
+              {/* PILLAR 5: LAWS & PESTILENCE */}
+              {masterDomain === 'laws' && (
+                <V17GrandStrategyPanels
+                  activeTab={subTab as any}
+                  activeChar={activeChar}
+                  world={world}
+                  onUpdateWorld={(w) => onUpdateWorld?.(w)}
+                  onNotify={(msg) => setNotificationMsg(msg)}
+                  onSelectCharacter={(c) => { setInspectedCharId(c.id); onSelectCharacter(c); }}
+                />
+              )}
+
+              {/* Inspected Character Dossier & Feudal Actions */}
+              {activeChar && masterDomain === 'court' && (
+                <CharacterDetailCard
+                  char={activeChar}
+                  world={world}
+                  spouse={spouse}
+                  heir={heir}
+                  rival={rival}
+                  lover={lover}
+                  onSelectCharacter={(c) => { setInspectedCharId(c.id); onSelectCharacter(c); }}
+                  onTriggerEvent={() => setIsEventModalOpen(true)}
+                  onExecuteScheme={() => {}}
+                  onWeaveStoryForCharacter={onWeaveStoryForCharacter}
+                  isMonarch={activeChar.id === ruler.id}
+                  onUpdateWorld={onUpdateWorld}
+                />
+              )}
+            </div>
+          </motion.aside>
+        )}
+      </AnimatePresence>
+
+      {/* CK3 Event Dilemma Modal */}
+      {isEventModalOpen && activeChar && (
+        <CK3EventModal
+          isOpen={isEventModalOpen}
+          onClose={() => setIsEventModalOpen(false)}
+          character={activeChar}
+          world={world}
+          onApplyEventOutcome={(txt, w) => { onUpdateWorld?.(w); setNotificationMsg(txt); }}
+        />
+      )}
+    </>
+  );
+};
+
+// ==========================================
+// CHARACTER DETAIL CARD & FEUDAL ACTIONS
+// ==========================================
+
+const CharacterDetailCard: React.FC<{
+  char: Character;
+  world: WorldState;
+  spouse?: Character;
+  heir?: Character;
+  rival?: Character;
+  lover?: Character;
+  onSelectCharacter: (char: Character) => void;
+  onTriggerEvent: () => void;
+  onExecuteScheme: () => void;
+  onWeaveStoryForCharacter?: (char: Character) => void;
+  isMonarch: boolean;
+  onUpdateWorld?: (w: WorldState) => void;
+}> = ({
+  char,
+  world,
+  spouse,
+  heir,
+  rival,
+  lover,
+  onSelectCharacter,
+  onTriggerEvent,
+  onWeaveStoryForCharacter,
+  isMonarch,
+  onUpdateWorld,
+}) => {
+  const [showActions, setShowActions] = useState(false);
+  const stats = computeCharacterStats(char);
+
+  const handleSendGift = () => {
+    const updated = JSON.parse(JSON.stringify(world)) as WorldState;
+    const donor = updated.characters.find((c) => c.id === world.monarchId) || updated.characters[0];
+    const target = updated.characters.find((c) => c.id === char.id)!;
+    PlayerActionEngine.sendGift(donor, target, 50, updated);
+    onUpdateWorld?.(updated);
+  };
+
+  return (
+    <div className="p-3.5 glass-card rounded-xl space-y-3">
+      {/* Identity Banner */}
+      <div className="flex items-center gap-3">
+        <span
+          className="w-12 h-12 rounded-xl flex items-center justify-center text-xl shadow-md border border-stone-700/80 shrink-0 font-serif"
+          style={{ backgroundColor: char.coatOfArms.bg, color: char.coatOfArms.fg }}
+        >
+          {char.coatOfArms.symbol}
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="font-serif font-bold text-stone-100 truncate text-xs">{char.name}</div>
+          <div className="text-[10px] text-amber-300 font-medium truncate">{char.title}</div>
+          <div className="text-[9px] text-stone-400">House {char.houseName} · Age {char.age} · {char.aiArchetype}</div>
+        </div>
+      </div>
+
+      {/* 5 Core Attributes */}
+      <div className="grid grid-cols-5 gap-1 text-center font-mono text-[9px]">
+        <div className="p-1 bg-black/40 rounded border border-stone-800">
+          <div className="text-stone-500">DIP</div>
+          <div className="font-bold text-stone-200">{stats.diplomacy}</div>
+        </div>
+        <div className="p-1 bg-black/40 rounded border border-stone-800">
+          <div className="text-stone-500">MAR</div>
+          <div className="font-bold text-stone-200">{stats.martial}</div>
+        </div>
+        <div className="p-1 bg-black/40 rounded border border-stone-800">
+          <div className="text-stone-500">STE</div>
+          <div className="font-bold text-stone-200">{stats.stewardship}</div>
+        </div>
+        <div className="p-1 bg-black/40 rounded border border-stone-800">
+          <div className="text-stone-500">INT</div>
+          <div className="font-bold text-stone-200">{stats.intrigue}</div>
+        </div>
+        <div className="p-1 bg-black/40 rounded border border-stone-800">
+          <div className="text-stone-500">LRN</div>
+          <div className="font-bold text-stone-200">{stats.learning}</div>
+        </div>
+      </div>
+
+      {/* Feudal Decrees Tray */}
+      <div className="pt-2 border-t border-stone-800/80 space-y-1.5">
+        <div className="flex items-center justify-between text-[10px] uppercase font-bold text-amber-400 tracking-wider">
+          <span>👑 Feudal Decrees</span>
+        </div>
+
+        <div className="grid grid-cols-2 gap-1 text-[10px]">
+          <button
+            onClick={handleSendGift}
+            className="p-1.5 rounded-lg bg-stone-900 hover:bg-stone-800 border border-stone-700/60 text-stone-200 text-center font-medium cursor-pointer"
+          >
+            🎁 Send 50g Gift
+          </button>
+          <button
+            onClick={onTriggerEvent}
+            className="p-1.5 rounded-lg bg-amber-600 hover:bg-amber-500 text-white font-bold text-center cursor-pointer shadow-sm"
+          >
+            ✨ Court Dilemma
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const CharacterListItem: React.FC<{ char: Character; isSelected: boolean; onSelect: () => void }> = ({ char, isSelected, onSelect }) => (
+  <div
+    onClick={onSelect}
+    className={`p-2 rounded-xl transition-all cursor-pointer flex items-center justify-between gap-2 ${
+      isSelected ? 'bg-amber-600/30 border border-amber-500/50' : 'hover:bg-stone-800/50 border border-transparent'
+    }`}
+  >
+    <div className="flex items-center gap-2 min-w-0">
+      <span
+        className="w-7 h-7 rounded-lg flex items-center justify-center text-xs shrink-0 font-serif"
+        style={{ backgroundColor: char.coatOfArms.bg, color: char.coatOfArms.fg }}
+      >
+        {char.coatOfArms.symbol}
+      </span>
+      <div className="min-w-0">
+        <div className="font-serif font-semibold text-stone-200 text-xs truncate">{char.name}</div>
+        <div className="text-[9px] text-amber-400/80 truncate">{char.role}</div>
+      </div>
+    </div>
+    <span className="text-[10px] text-stone-500 font-mono">Age {char.age}</span>
+  </div>
+);
+
+const CharacterPortraitNode = ({ char, isPrimary, onClick }: { char: Character; isPrimary?: boolean; onClick: () => void }) => (
+  <div onClick={onClick} className="flex flex-col items-center gap-1 cursor-pointer group">
+    <div
+      className={`w-11 h-11 rounded-full flex items-center justify-center text-lg shadow-lg border-2 transition-all ${
+        isPrimary ? 'border-amber-400 ring-2 ring-amber-500/30' : 'border-stone-700 group-hover:border-amber-400'
+      }`}
+      style={{ backgroundColor: char.coatOfArms.bg, color: char.coatOfArms.fg }}
+    >
+      {char.coatOfArms.symbol}
+    </div>
+    <div className="text-[10px] font-bold text-stone-200 group-hover:text-amber-300 text-center max-w-[65px] leading-tight truncate">
+      {char.name.split(' ')[0]}
+    </div>
+    <div className="text-[9px] text-stone-500 text-center truncate max-w-[65px]">{char.role}</div>
+  </div>
+);

@@ -1,0 +1,2058 @@
+// heraldry.ts — Contained Medieval European SVG Heraldry Generator (Shields, Circles, Squares, Rectangles, Banners, Ovals)
+
+export type TinctureType = "metal" | "colour";
+export type MetalName = "Or" | "Argent";
+export type ColourName = "Gules" | "Azure" | "Sable" | "Vert" | "Purpure";
+export type TinctureName = MetalName | ColourName;
+export type FurName = "Ermine" | "Ermines" | "Erminois" | "Vair" | "Potent";
+export type HeraldicFill = TinctureName | FurName;
+
+export type BaseShape =
+  | "heater"
+  | "kite"
+  | "bouche"
+  | "french"
+  | "iberian"
+  | "lozenge"
+  | "circle"
+  | "oval"
+  | "square"
+  | "rectangle"
+  | "banner";
+
+/** @deprecated Alias for BaseShape */
+export type ShieldShape = BaseShape;
+
+export type DivisionId =
+  | "plain"
+  | "per-pale"
+  | "per-fess"
+  | "per-bend"
+  | "per-bend-sinister"
+  | "per-chevron"
+  | "quarterly"
+  | "per-saltire"
+  | "gyronny"
+  | "paly"
+  | "barry"
+  | "bendy"
+  | "chequy"
+  | "lozengy"
+  | "seme-fleur"
+  | "seme-mullet"
+  | "crusilly";
+
+export type LineStyle = "plain" | "wavy" | "indented" | "embattled" | "engrailed" | "invected";
+
+export type OrdinaryId =
+  | "none"
+  | "chief"
+  | "fess"
+  | "pale"
+  | "cross"
+  | "saltire"
+  | "chevron"
+  | "bend"
+  | "bend-sinister"
+  | "bordure"
+  | "orle"
+  | "pile"
+  | "canton"
+  | "flaunches";
+
+export type ChargeId =
+  | "lion"
+  | "eagle"
+  | "fleur"
+  | "rose"
+  | "escallop"
+  | "martlet"
+  | "cross-pattee"
+  | "cross-moline"
+  | "mullet"
+  | "sun"
+  | "crescent"
+  | "crown"
+  | "tower"
+  | "sword"
+  | "key"
+  | "annulet"
+  | "lozenge"
+  | "griffin"
+  | "dragon"
+  | "wyvern"
+  | "phoenix"
+  | "stag"
+  | "boar"
+  | "wolf"
+  | "bear"
+  | "bull"
+  | "falcon"
+  | "raven"
+  | "unicorn"
+  | "serpent"
+  | "oak-tree"
+  | "chalice"
+  | "anchor"
+  | "crossed-swords"
+  | "warhammer"
+  | "halberd"
+  | "portcullis"
+  | "scales"
+  | "gauntlet";
+
+export type BrisureId =
+  | "label"
+  | "crescent"
+  | "mullet"
+  | "martlet"
+  | "annulet"
+  | "fleur"
+  | "rose"
+  | "cross-moline"
+  | "quatrefoil";
+
+export type CadencyMethod =
+  | "auto"
+  | "brisure"
+  | "bordure"
+  | "bordure-compony"
+  | "bendlet"
+  | "baton-sinister"
+  | "canton"
+  | "invert-tinctures";
+
+export interface TinctureDef {
+  name: TinctureName;
+  hex: string;
+  type: TinctureType;
+}
+
+export interface CadencyMark {
+  method: Exclude<CadencyMethod, "auto">;
+  brisure?: BrisureId;
+  sonOrder?: number;
+  tincture: TinctureName;
+  secondaryTincture?: TinctureName;
+  generation: number;
+  branchSeed: string;
+}
+
+export interface MarshallingConfig {
+  mode: "impaled" | "quartered";
+  arms: HeraldryConfig[];
+  inescutcheon?: HeraldryConfig;
+}
+
+export interface HeraldryConfig {
+  seed: string;
+  shape: BaseShape;
+  field: {
+    division: DivisionId;
+    lineStyle: LineStyle;
+    primary: HeraldicFill;
+    secondary?: HeraldicFill;
+  };
+  ordinary: {
+    type: OrdinaryId;
+    lineStyle: LineStyle;
+    tincture?: TinctureName;
+    fimbriated?: TinctureName;
+  };
+  charge: {
+    type: ChargeId;
+    count: 1 | 3;
+    context: "field" | "on-chief" | "on-fess" | "on-ordinary";
+    tincture?: TinctureName;
+    counterchanged: boolean;
+  } | null;
+  cadency: CadencyMark[];
+  lineage: {
+    parentSeed?: string;
+    generation: number;
+  };
+  marshalling?: MarshallingConfig;
+}
+
+export interface RenderOptions {
+  width?: number;
+  height?: number;
+  sheen?: boolean;
+  outline?: boolean;
+  chargeDetails?: boolean;
+  instanceId?: string;
+}
+
+export interface HeraldryOptions extends RenderOptions {
+  shape?: BaseShape;
+  /** Alias for `shape` */
+  shield?: BaseShape;
+  division?: DivisionId;
+  lineStyle?: LineStyle;
+  allowFurs?: boolean;
+  allowComplexFields?: boolean;
+  simple?: boolean;
+  ordinary?: OrdinaryId;
+  charge?: ChargeId | null;
+}
+
+export interface CadetBranchOptions extends RenderOptions {
+  branchSeed?: string | number;
+  method?: CadencyMethod;
+  subtle?: boolean;
+  sonOrder?: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9;
+  tincture?: TinctureName;
+}
+
+export interface HeraldryResult {
+  svg: string;
+  blazon: string;
+  config: HeraldryConfig;
+}
+
+// ============================================================================
+// Tinctures, Furs & Base Shapes
+// ============================================================================
+
+const METALS: readonly TinctureDef[] = [
+  { name: "Or", hex: "#F6C844", type: "metal" },
+  { name: "Argent", hex: "#F8FAFC", type: "metal" },
+];
+
+const COLOURS: readonly TinctureDef[] = [
+  { name: "Gules", hex: "#C82829", type: "colour" },
+  { name: "Azure", hex: "#1D4ED8", type: "colour" },
+  { name: "Sable", hex: "#1E293B", type: "colour" },
+  { name: "Vert", hex: "#15803D", type: "colour" },
+  { name: "Purpure", hex: "#6D28D9", type: "colour" },
+];
+
+export const ALL_TINCTURES: Record<TinctureName, TinctureDef> = Object.fromEntries(
+  [...METALS, ...COLOURS].map((t) => [t.name, t])
+) as Record<TinctureName, TinctureDef>;
+
+export const FURS: Record<FurName, { name: FurName; effectiveType: TinctureType }> = {
+  Ermine: { name: "Ermine", effectiveType: "metal" },
+  Ermines: { name: "Ermines", effectiveType: "colour" },
+  Erminois: { name: "Erminois", effectiveType: "metal" },
+  Vair: { name: "Vair", effectiveType: "metal" },
+  Potent: { name: "Potent", effectiveType: "metal" },
+};
+
+const FUR_NAMES = Object.keys(FURS) as FurName[];
+
+interface ShapeDef {
+  path: string;
+  leftX: number;
+  rightX: number;
+  topY: number;
+  bottomY: number;
+  cy: number;
+  wideChief: boolean;
+  isWideBanner?: boolean;
+  chargeScale: number;
+}
+
+export const SHAPES: Record<BaseShape, ShapeDef> = {
+  heater: {
+    path: "M 15 15 L 185 15 L 185 110 C 185 170, 145 205, 100 225 C 55 205, 15 170, 15 110 Z",
+    leftX: 15,
+    rightX: 185,
+    topY: 15,
+    bottomY: 225,
+    cy: 108,
+    wideChief: true,
+    chargeScale: 1,
+  },
+  kite: {
+    path: "M 20 36 Q 100 6, 180 36 Q 180 125, 100 230 Q 20 125, 20 36 Z",
+    leftX: 20,
+    rightX: 180,
+    topY: 20,
+    bottomY: 230,
+    cy: 108,
+    wideChief: false,
+    chargeScale: 0.85,
+  },
+  bouche: {
+    path: "M 15 15 L 185 15 L 185 140 C 185 190, 145 215, 100 225 C 55 215, 15 190, 15 140 L 15 76 C 34 74, 34 46, 15 44 Z",
+    leftX: 15,
+    rightX: 185,
+    topY: 15,
+    bottomY: 225,
+    cy: 108,
+    wideChief: true,
+    chargeScale: 0.94,
+  },
+  french: {
+    path: "M 15 15 L 185 15 L 185 190 Q 185 215, 155 215 L 115 215 Q 100 215, 100 227 Q 100 215, 85 215 L 45 215 Q 15 215, 15 190 Z",
+    leftX: 15,
+    rightX: 185,
+    topY: 15,
+    bottomY: 227,
+    cy: 112,
+    wideChief: true,
+    chargeScale: 1,
+  },
+  iberian: {
+    path: "M 15 15 L 185 15 L 185 140 A 85 85 0 0 1 15 140 Z",
+    leftX: 15,
+    rightX: 185,
+    topY: 15,
+    bottomY: 225,
+    cy: 108,
+    wideChief: true,
+    chargeScale: 0.96,
+  },
+  lozenge: {
+    path: "M 100 12 L 185 120 L 100 228 L 15 120 Z",
+    leftX: 15,
+    rightX: 185,
+    topY: 12,
+    bottomY: 228,
+    cy: 120,
+    wideChief: false,
+    chargeScale: 0.78,
+  },
+  circle: {
+    path: "M 14 120 A 86 86 0 1 0 186 120 A 86 86 0 1 0 14 120 Z",
+    leftX: 14,
+    rightX: 186,
+    topY: 34,
+    bottomY: 206,
+    cy: 120,
+    wideChief: false,
+    chargeScale: 0.92,
+  },
+  oval: {
+    path: "M 24 120 A 76 98 0 1 0 176 120 A 76 98 0 1 0 24 120 Z",
+    leftX: 24,
+    rightX: 176,
+    topY: 22,
+    bottomY: 218,
+    cy: 120,
+    wideChief: false,
+    chargeScale: 0.88,
+  },
+  square: {
+    path: "M 15 35 H 185 V 205 H 15 Z",
+    leftX: 15,
+    rightX: 185,
+    topY: 35,
+    bottomY: 205,
+    cy: 120,
+    wideChief: true,
+    chargeScale: 0.95,
+  },
+  rectangle: {
+    path: "M 22 16 H 178 V 224 H 22 Z",
+    leftX: 22,
+    rightX: 178,
+    topY: 16,
+    bottomY: 224,
+    cy: 120,
+    wideChief: true,
+    chargeScale: 0.96,
+  },
+  banner: {
+    path: "M 10 55 H 190 V 185 H 10 Z",
+    leftX: 10,
+    rightX: 190,
+    topY: 55,
+    bottomY: 185,
+    cy: 120,
+    wideChief: true,
+    isWideBanner: true,
+    chargeScale: 0.76,
+  },
+};
+
+// ============================================================================
+// Deterministic PRNG & Geometry Helpers
+// ============================================================================
+
+function hashSeed(str: string): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return h >>> 0;
+}
+
+function createRng(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a |= 0;
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function randomSeedString(): string {
+  if (typeof globalThis.crypto !== "undefined" && globalThis.crypto.getRandomValues) {
+    const buf = new Uint32Array(2);
+    globalThis.crypto.getRandomValues(buf);
+    return `${buf[0].toString(36)}-${buf[1].toString(36)}`;
+  }
+  return `${Math.floor(Math.random() * 1e9).toString(36)}-${Date.now().toString(36)}`;
+}
+
+const pick = <T>(rng: () => number, arr: readonly T[]): T =>
+  arr[Math.floor(rng() * arr.length)];
+
+const f = (n: number): string => Number(n.toFixed(2)).toString();
+
+function fillType(fill: HeraldicFill): TinctureType {
+  if (fill in ALL_TINCTURES) return ALL_TINCTURES[fill as TinctureName].type;
+  return FURS[fill as FurName].effectiveType;
+}
+
+function contrastPool(type: TinctureType): readonly TinctureDef[] {
+  return type === "metal" ? COLOURS : METALS;
+}
+
+function lineSegment(
+  x1: number,
+  y1: number,
+  x2: number,
+  y2: number,
+  style: LineStyle,
+  amp = 5.5,
+  stepLen = 22
+): string {
+  if (style === "plain") return `L ${f(x2)} ${f(y2)}`;
+  const dx = x2 - x1;
+  const dy = y2 - y1;
+  const len = Math.hypot(dx, dy);
+  if (len < 1) return `L ${f(x2)} ${f(y2)}`;
+
+  const tx = dx / len;
+  const ty = dy / len;
+  const nx = -ty;
+  const ny = tx;
+  const n = Math.max(4, Math.round(len / stepLen));
+  const pt = (t: number, o: number) =>
+    `${f(x1 + tx * t * len + nx * o)} ${f(y1 + ty * t * len + ny * o)}`;
+
+  const cmds: string[] = [];
+  for (let i = 0; i < n; i++) {
+    const t0 = i / n;
+    const t1 = (i + 1) / n;
+    const dt = t1 - t0;
+
+    if (style === "wavy") {
+      cmds.push(`Q ${pt(t0 + dt * 0.25, amp)} ${pt(t0 + dt * 0.5, 0)}`);
+      cmds.push(`Q ${pt(t0 + dt * 0.75, -amp)} ${pt(t1, 0)}`);
+    } else if (style === "indented") {
+      cmds.push(`L ${pt(t0 + dt * 0.25, amp)} L ${pt(t0 + dt * 0.75, -amp)} L ${pt(t1, 0)}`);
+    } else if (style === "embattled") {
+      cmds.push(
+        `L ${pt(t0 + dt * 0.25, 0)} L ${pt(t0 + dt * 0.25, -amp)} L ${pt(t0 + dt * 0.75, -amp)} L ${pt(t0 + dt * 0.75, 0)} L ${pt(t1, 0)}`
+      );
+    } else if (style === "engrailed") {
+      cmds.push(`Q ${pt(t0 + dt * 0.5, -amp * 1.35)} ${pt(t1, 0)}`);
+    } else if (style === "invected") {
+      cmds.push(`Q ${pt(t0 + dt * 0.5, amp * 1.35)} ${pt(t1, 0)}`);
+    }
+  }
+  return cmds.join(" ");
+}
+
+// ============================================================================
+// Charge Vector Paths
+// ============================================================================
+
+function circlePath(cx: number, cy: number, r: number): string {
+  return `M ${f(cx - r)} ${f(cy)} A ${r} ${r} 0 1 0 ${f(cx + r)} ${f(cy)} A ${r} ${r} 0 1 0 ${f(cx - r)} ${f(cy)} Z`;
+}
+
+function starPath(points: number, outerR: number, innerR: number): string {
+  const cmds: string[] = [];
+  for (let i = 0; i < points * 2; i++) {
+    const r = i % 2 === 0 ? outerR : innerR;
+    const a = (i * Math.PI) / points - Math.PI / 2;
+    cmds.push(`${i === 0 ? "M" : "L"} ${f(Math.cos(a) * r)} ${f(Math.sin(a) * r)}`);
+  }
+  return cmds.join(" ") + " Z";
+}
+
+function rosePath(): string {
+  const petals: string[] = [];
+  const sepals: string[] = [];
+  for (let i = 0; i < 5; i++) {
+    const a = (i * 2 * Math.PI) / 5 - Math.PI / 2;
+    const p1 = `${f(Math.cos(a - 0.52) * 14)} ${f(Math.sin(a - 0.52) * 14)}`;
+    const c1 = `${f(Math.cos(a - 0.36) * 40)} ${f(Math.sin(a - 0.36) * 40)}`;
+    const c2 = `${f(Math.cos(a + 0.36) * 40)} ${f(Math.sin(a + 0.36) * 40)}`;
+    const p2 = `${f(Math.cos(a + 0.52) * 14)} ${f(Math.sin(a + 0.52) * 14)}`;
+    petals.push(`${i === 0 ? `M ${p1}` : `L ${p1}`} C ${c1}, ${c2}, ${p2}`);
+
+    const sa = a + Math.PI / 5;
+    sepals.push(
+      `M ${f(Math.cos(sa - 0.14) * 24)} ${f(Math.sin(sa - 0.14) * 24)} L ${f(Math.cos(sa) * 35)} ${f(Math.sin(sa) * 35)} L ${f(Math.cos(sa + 0.14) * 24)} ${f(Math.sin(sa + 0.14) * 24)} Z`
+    );
+  }
+  return `${petals.join(" ")} Z ${sepals.join(" ")} ${circlePath(0, 0, 11)} ${circlePath(0, 0, 5)}`;
+}
+
+function quatrefoilPath(): string {
+  return [
+    circlePath(0, -17, 15),
+    circlePath(17, 0, 15),
+    circlePath(0, 17, 15),
+    circlePath(-17, 0, 15),
+    circlePath(0, 0, 9),
+  ].join(" ");
+}
+
+export interface ChargeMeta {
+  singular: string;
+  plural: string;
+  path: string;
+  detailPath?: string;
+}
+
+export const CHARGE_META: Record<ChargeId, ChargeMeta> = {
+  lion: {
+    singular: "lion rampant",
+    plural: "lions rampant",
+    path: [
+      "M -10 -34 C -4 -36, 2 -32, 3 -26",
+      "C 7 -18, 5 -8, 3 4 C 2 10, 4 14, 6 18",
+      "C 16 14, 24 -2, 20 -22 C 18 -28, 13 -28, 12 -22 C 16 -22, 18 -16, 16 -4 C 14 8, 10 16, 5 22",
+      "L 10 34 L 4 38 L -2 36 L 3 32 L -1 22",
+      "L -10 32 L -18 35 L -22 31 L -13 24 L -10 14",
+      "C -12 8, -13 0, -12 -6 L -28 -2 L -32 -7 L -26 -10 L -14 -10",
+      "L -14 -13 L -28 -20 L -30 -27 L -24 -27 L -16 -18",
+      "L -14 -14 L -23 -15 L -22 -18 L -16 -18 L -24 -22 L -22 -26 L -15 -24 C -16 -30, -14 -33, -10 -34 Z",
+    ].join(" "),
+    detailPath:
+      "M -21 -21 L -28 -20 L -25 -16 Z M -29 -28 L -34 -31 L -27 -24 Z M -32 -7 L -36 -5 L -30 -3 Z M -22 31 L -25 35 L -18 34 Z",
+  },
+  eagle: {
+    singular: "eagle displayed",
+    plural: "eagles displayed",
+    path: [
+      "M -2 -34 C 4 -35, 6 -30, 4 -24",
+      "L 14 -22 C 26 -30, 36 -26, 36 -18 L 28 -16 L 35 -10 L 24 -8 L 31 -2 L 20 0 L 24 6 L 12 4",
+      "L 14 18 L 22 22 L 18 26 L 13 22 L 12 28 L 8 24 L 6 16",
+      "L 10 34 L 4 36 L 0 32 L -4 36 L -10 34 L -6 16",
+      "L -8 24 L -12 28 L -13 22 L -18 26 L -22 22 L -14 18 L -12 4",
+      "L -24 6 L -20 0 L -31 -2 L -24 -8 L -35 -10 L -28 -16 L -36 -18 C -36 -26, -26 -30, -14 -22 L -5 -24",
+      "C -6 -28, -10 -28, -14 -24 C -12 -31, -8 -34, -2 -34 Z",
+    ].join(" "),
+    detailPath:
+      "M -11 -27 L -17 -24 L -12 -22 Z M 18 22 L 24 23 L 19 27 Z M -18 22 L -24 23 L -19 27 Z",
+  },
+  fleur: {
+    singular: "fleur-de-lis",
+    plural: "fleurs-de-lis",
+    path: [
+      "M 0 -38 C 12 -20, 12 -4, 5 8 H -5 C -12 -4, -12 -20, 0 -38 Z",
+      "M 5 8 C 12 -14, 34 -12, 30 6 C 28 16, 16 16, 10 8 Z",
+      "M -5 8 C -12 -14, -34 -12, -30 6 C -28 16, -16 16, -10 8 Z",
+      "M -20 8 H 20 V 15 H -20 Z",
+      "M -10 15 C -14 26, -20 32, -14 36 C -8 30, -4 26, 0 38 C 4 26, 8 30, 14 36 C 20 32, 14 26, 10 15 Z",
+    ].join(" "),
+  },
+  rose: {
+    singular: "rose",
+    plural: "roses",
+    path: rosePath(),
+    detailPath: circlePath(0, 0, 5.5),
+  },
+  escallop: {
+    singular: "escallop",
+    plural: "escallops",
+    path: [
+      "M -12 20 L -24 22 L -20 12 C -32 4, -36 -14, -24 -22 C -18 -32, -8 -32, 0 -34 C 8 -32, 18 -32, 24 -22 C 36 -14, 32 4, 20 12 L 24 22 L 12 20 L 6 30 H -6 Z",
+      "M -16 -18 L -6 14 L -9 15 L -19 -16 Z",
+      "M 0 -24 L 2 14 H -2 L 0 -24 Z",
+      "M 16 -18 L 19 -16 L 9 15 L 6 14 Z",
+    ].join(" "),
+  },
+  martlet: {
+    singular: "martlet",
+    plural: "martlets",
+    path: "M -26 -14 L -17 -19 C -14 -26, -5 -26, -2 -18 L 6 -32 L 11 -20 L 19 -26 L 16 -13 L 30 -8 L 19 0 L 28 7 L 12 6 C 8 15, 2 20, -4 21 L -2 28 L -8 26 L -10 19 C -18 17, -21 6, -18 -5 L -21 -11 Z",
+  },
+  "cross-pattee": {
+    singular: "cross pattée",
+    plural: "crosses pattée",
+    path: "M -14 -36 H 14 L 7 -7 L 36 -14 V 14 L 7 7 L 14 36 H -14 L -7 7 L -36 14 V -14 L -7 -7 Z",
+  },
+  "cross-moline": {
+    singular: "cross moline",
+    plural: "crosses moline",
+    path: [
+      "M 6 -6 L 6 -22 C 9 -33, 22 -32, 20 -20 C 16 -24, 10 -28, 0 -24 C -10 -28, -16 -24, -20 -20 C -22 -32, -9 -33, -6 -22 L -6 -6",
+      "L -22 -6 C -33 -9, -32 -22, -20 -20 C -24 -16, -28 -10, -24 0 C -28 10, -24 16, -20 20 C -32 22, -33 9, -22 6 L -6 6",
+      "L -6 22 C -9 33, -22 32, -20 20 C -16 24, -10 28, 0 24 C 10 28, 16 24, 20 20 C 22 32, 9 33, 6 22 L 6 6",
+      "L 22 6 C 33 9, 32 22, 20 20 C 24 16, 28 10, 24 0 C 28 -10, 24 -16, 20 -20 C 32 -22, 33 -9, 22 -6 Z",
+    ].join(" "),
+  },
+  mullet: { singular: "mullet", plural: "mullets", path: starPath(5, 38, 15) },
+  sun: {
+    singular: "sun in splendour",
+    plural: "suns in splendour",
+    path: `${starPath(12, 38, 22)} ${circlePath(0, 0, 15)}`,
+  },
+  crescent: {
+    singular: "crescent",
+    plural: "crescents",
+    path: "M -28 -18 A 34 34 0 1 0 28 -18 A 29 29 0 1 1 -28 -18 Z",
+  },
+  crown: {
+    singular: "crown",
+    plural: "crowns",
+    path: [
+      "M -30 16 L -34 -16 L -16 2 L 0 -24 L 16 2 L 34 -16 L 30 16 Z",
+      "M -30 20 H 30 V 28 H -30 Z",
+      circlePath(-34, -21, 3.8),
+      circlePath(0, -29, 4.2),
+      circlePath(34, -21, 3.8),
+    ].join(" "),
+  },
+  tower: {
+    singular: "tower",
+    plural: "towers",
+    path: [
+      "M -24 34 L -20 -20 V -34 H -10 V -22 H -5 V -34 H 5 V -22 H 10 V -34 H 20 V -20 L 24 34 Z",
+      "M -8 34 V 14 A 8 8 0 0 1 8 14 V 34 Z",
+      "M -3 -12 H 3 V 0 H -3 Z",
+    ].join(" "),
+  },
+  sword: {
+    singular: "sword",
+    plural: "swords",
+    path: "M 0 -42 L 6 -30 V 14 H 20 V 20 H 4 V 34 L 8 38 L 0 43 L -8 38 L -4 34 V 20 H -20 V 14 H -6 V -30 Z",
+  },
+  key: {
+    singular: "key",
+    plural: "keys",
+    path: [
+      "M -6 -24 H 6 V 12 C 16 14, 22 22, 20 31 C 18 39, 10 42, 0 42 C -10 42, -18 39, -20 31 C -22 22, -16 14, -6 12 Z",
+      "M 6 -24 H 20 V -16 H 13 V -10 H 19 V -2 H 6 Z",
+      circlePath(0, 27, 9),
+    ].join(" "),
+  },
+  annulet: {
+    singular: "annulet",
+    plural: "annulets",
+    path: `${circlePath(0, 0, 34)} ${circlePath(0, 0, 18)}`,
+  },
+  lozenge: { singular: "lozenge", plural: "lozenges", path: "M 0 -38 L 28 0 L 0 38 L -28 0 Z" },
+  griffin: {
+    singular: "griffin segreant",
+    plural: "griffins segreant",
+    path: [
+      "M -14 -34 C -8 -37, -2 -34, 0 -28 L 10 -34 L 24 -28 L 16 -20 L 28 -16 L 16 -10 L 24 -4 L 10 -2",
+      "C 8 6, 10 14, 14 20 C 22 14, 26 2, 22 -10 C 26 -6, 28 8, 18 22 L 12 34 L 5 37 L 0 34 L 4 28 L -1 18",
+      "L -10 30 L -18 34 L -22 30 L -14 22 L -10 10 L -26 6 L -30 0 L -22 -2 L -13 -4",
+      "L -14 -12 L -28 -16 L -32 -22 L -22 -24 L -14 -20 L -24 -28 L -18 -32 Z",
+    ].join(" "),
+    detailPath: "M -24 -28 L -32 -26 L -26 -22 Z M -30 0 L -35 3 L -28 4 Z",
+  },
+  dragon: {
+    singular: "dragon passant",
+    plural: "dragons passant",
+    path: [
+      "M -32 -14 L -20 -22 L -12 -18 L -6 -26 L 8 -34 L 24 -26 L 14 -18 L 26 -14 L 14 -8 L 20 -2 L 6 -2",
+      "C 14 4, 24 4, 34 -4 L 30 6 C 22 12, 12 12, 6 10 L 14 26 L 6 30 L 2 22 L -2 12",
+      "L -10 26 L -18 28 L -16 18 L -12 8 L -24 14 L -30 8 L -20 2 L -16 -4 L -28 -8 L -34 -10 Z",
+    ].join(" "),
+    detailPath: "M -34 -10 L -38 -14 L -30 -12 Z M 34 -4 L 38 -8 L 34 2 Z",
+  },
+  wyvern: {
+    singular: "wyvern",
+    plural: "wyverns",
+    path: [
+      "M -26 -18 L -14 -24 L -8 -18 L 4 -34 L 22 -26 L 12 -16 L 26 -12 L 12 -4",
+      "C 8 6, 16 16, 26 12 C 32 10, 30 2, 24 4 C 28 -2, 36 6, 30 18 C 22 28, 6 24, 0 14",
+      "L -6 30 L -14 32 L -12 22 L -10 12 L -22 18 L -26 12 L -14 4 L -16 -6 L -28 -10 Z",
+    ].join(" "),
+  },
+  phoenix: {
+    singular: "phoenix rising",
+    plural: "phoenixes rising",
+    path: [
+      "M 0 -36 C 5 -36, 7 -30, 4 -24 L 14 -22 C 26 -32, 36 -28, 36 -18 L 28 -14 L 35 -8 L 24 -6 L 30 0 L 16 2",
+      "L 10 14 L 20 26 L 10 22 L 12 34 L 4 24 L 0 36 L -4 24 L -12 34 L -10 22 L -20 26 L -10 14",
+      "L -16 2 L -30 0 L -24 -6 L -35 -8 L -28 -14 L -36 -18 C -36 -28, -26 -32, -14 -22 L -4 -24 C -7 -30, -5 -36, 0 -36 Z",
+    ].join(" "),
+    detailPath: "M -18 28 L -10 18 L -4 28 L 0 20 L 4 28 L 10 18 L 18 28 L 0 38 Z",
+  },
+  stag: {
+    singular: "stag's head cabossed",
+    plural: "stags' heads cabossed",
+    path: [
+      "M 0 -8 L 12 -14 L 22 -28 L 26 -36 L 20 -26 L 28 -26 L 18 -20 L 32 -16 L 18 -14 L 12 -6",
+      "L 22 -4 L 18 2 L 10 2 L 10 16 L 4 32 L 0 36 L -4 32 L -10 16 L -10 2 L -18 2 L -22 -4 L -12 -6",
+      "L -18 -14 L -32 -16 L -18 -20 L -28 -26 L -20 -26 L -26 -36 L -22 -28 L -12 -14 Z",
+    ].join(" "),
+  },
+  boar: {
+    singular: "boar's head erased",
+    plural: "boars' heads erased",
+    path: [
+      "M -30 4 L -24 -8 L -18 -16 L -10 -24 L -4 -18 L 4 -24 L 12 -18 L 24 -16 L 32 -4 L 24 8 L 28 16 L 18 14",
+      "L 14 24 L 6 18 L -2 24 L -10 18 L -18 20 L -22 10 L -32 10 Z",
+    ].join(" "),
+    detailPath: "M -24 6 C -30 0, -28 -8, -22 -6 C -24 -2, -22 2, -18 4 Z",
+  },
+  wolf: {
+    singular: "wolf's head erased",
+    plural: "wolves' heads erased",
+    path: [
+      "M -32 -2 L -16 -14 L -14 -32 L -4 -20 L 4 -32 L 8 -18 L 22 -14 L 28 2 L 20 12 L 26 22 L 14 20",
+      "L 8 30 L 0 22 L -8 30 L -14 20 L -12 10 L -26 12 L -20 4 L -32 4 Z",
+    ].join(" "),
+    detailPath: "M -24 4 L -18 0 L -16 6 Z",
+  },
+  bear: {
+    singular: "bear rampant",
+    plural: "bears rampant",
+    path: [
+      "M -10 -32 C -2 -36, 8 -32, 10 -24 C 18 -14, 20 2, 14 16 L 20 32 L 10 36 L 4 28 L 0 18",
+      "L -8 30 L -18 34 L -22 28 L -14 18 L -14 4 L -28 2 L -30 -6 L -18 -8 L -16 -14",
+      "L -28 -18 L -28 -26 L -18 -24 L -16 -28 Z",
+    ].join(" "),
+  },
+  bull: {
+    singular: "bull's head cabossed",
+    plural: "bulls' heads cabossed",
+    path: [
+      "M -12 -14 C -26 -16, -34 -26, -28 -36 C -26 -26, -18 -22, -8 -20 H 8",
+      "C 18 -22, 26 -26, 28 -36 C 34 -26, 26 -16, 12 -14 L 24 -10 L 20 -2 L 12 -2",
+      "L 14 16 L 8 30 H -8 L -14 16 L -12 -2 L -20 -2 L -24 -10 Z",
+    ].join(" "),
+    detailPath: circlePath(0, 28, 5),
+  },
+  falcon: {
+    singular: "falcon rising",
+    plural: "falcons rising",
+    path: [
+      "M -18 -24 C -12 -28, -6 -24, -6 -16 L 8 -34 L 24 -26 L 14 -16 L 32 -12 L 16 -4 L 28 2 L 10 4",
+      "L 12 20 L 20 28 L 10 26 L 4 34 L -2 24 L -8 32 L -12 20 L -22 24 L -18 14 L -14 4",
+      "L -26 -4 L -14 -8 L -16 -16 L -24 -18 Z",
+    ].join(" "),
+  },
+  raven: {
+    singular: "raven close",
+    plural: "ravens close",
+    path: [
+      "M -30 -16 L -18 -22 C -12 -26, -4 -22, -2 -14 C 10 -12, 22 -4, 32 10 L 20 12 L 28 20 L 10 16",
+      "L 2 18 L 6 30 L 12 32 L 2 34 L -2 22 L -6 32 L -14 32 L -8 20 C -16 14, -18 2, -16 -8 L -24 -10 Z",
+    ].join(" "),
+  },
+  unicorn: {
+    singular: "unicorn's head",
+    plural: "unicorns' heads",
+    path: [
+      "M -34 -34 L -14 -18 L -8 -28 L -4 -18 C 6 -18, 16 -12, 20 2 L 26 24 L 16 20 L 10 30 L 2 22 L -6 30",
+      "L -10 14 L -12 4 L -24 12 L -30 6 L -22 -4 L -16 -12 Z",
+    ].join(" "),
+  },
+  serpent: {
+    singular: "serpent nowed",
+    plural: "serpents nowed",
+    path: [
+      "M -22 -28 C -10 -36, 16 -32, 18 -16 C 20 0, -18 2, -18 16 C -18 30, 14 34, 26 22",
+      "L 20 16 C 12 24, -8 22, -8 14 C -8 6, 28 4, 28 -16 C 28 -36, -6 -42, -26 -30 L -32 -24 L -24 -20 Z",
+    ].join(" "),
+  },
+  "oak-tree": {
+    singular: "oak tree eradicated",
+    plural: "oak trees eradicated",
+    path: [
+      "M 0 -36 C 12 -36, 20 -28, 22 -20 C 32 -18, 34 -4, 26 4 C 22 10, 12 10, 6 8",
+      "V 22 L 18 32 L 10 34 L 2 26 L 0 36 L -2 26 L -10 34 L -18 32 L -6 22 V 8",
+      "C -12 10, -22 10, -26 4 C -34 -4, -32 -18, -22 -20 C -20 -28, -12 -36, 0 -36 Z",
+    ].join(" "),
+  },
+  chalice: {
+    singular: "chalice",
+    plural: "chalices",
+    path: [
+      "M -24 -32 H 24 C 24 -12, 14 -2, 6 2 V 20 L 20 28 V 34 H -20 V 28 L -6 20 V 2 C -14 -2, -24 -12, -24 -32 Z",
+      "M -10 8 H 10 V 13 H -10 Z",
+    ].join(" "),
+  },
+  anchor: {
+    singular: "anchor",
+    plural: "anchors",
+    path: [
+      `${circlePath(0, -30, 7)} ${circlePath(0, -30, 3)}`,
+      "M -18 -20 H 18 V -14 H 4 V 24 C 14 22, 22 14, 24 4 L 30 8 C 28 24, 14 34, 0 36 C -14 34, -28 24, -30 8 L -24 4 C -22 14, -14 22, -4 24 V -14 H -18 Z",
+    ].join(" "),
+  },
+  "crossed-swords": {
+    singular: "pair of swords in saltire",
+    plural: "pairs of swords in saltire",
+    path: [
+      "M -28 -32 L -18 -28 L 16 10 L 24 4 L 28 8 L 18 16 L 28 28 L 22 34 L 12 22 L 4 30 L 0 26 L 8 18 L -24 -22 Z",
+      "M 28 -32 L 24 -22 L -8 18 L 0 26 L -4 30 L -12 22 L -22 34 L -28 28 L -18 16 L -28 8 L -24 4 L -16 10 L 18 -28 Z",
+    ].join(" "),
+  },
+  warhammer: {
+    singular: "warhammer",
+    plural: "warhammers",
+    path: [
+      "M -4 -36 H 4 V -26 H 22 V -30 L 32 -20 L 22 -10 V -14 H 4 V 36 H -4 V -14 H -18 V -10 H -28 V -30 H -18 V -26 H -4 Z",
+    ].join(" "),
+  },
+  halberd: {
+    singular: "halberd",
+    plural: "halberds",
+    path: [
+      "M 0 -42 L 5 -26 H 4 V -22 C 16 -24, 26 -16, 26 -2 C 26 8, 16 14, 4 10 V 38 H -4 V 2 L -22 -4 L -12 -10 L -4 -8 V -26 H -5 Z",
+    ].join(" "),
+  },
+  portcullis: {
+    singular: "portcullis",
+    plural: "portcullises",
+    path: [
+      "M -26 -26 H 26 V -20 H -26 Z M -26 -10 H 26 V -4 H -26 Z M -26 6 H 26 V 12 H -26 Z",
+      "M -22 -26 H -16 V 24 L -19 34 L -22 24 Z M -11 -26 H -5 V 24 L -8 34 L -11 24 Z",
+      "M 5 -26 H 11 V 24 L 8 34 L 5 24 Z M 16 -26 H 22 V 24 L 19 34 L 16 24 Z",
+      circlePath(-24, -30, 4),
+      circlePath(24, -30, 4),
+    ].join(" "),
+  },
+  scales: {
+    singular: "scales of justice",
+    plural: "scales of justice",
+    path: [
+      "M -3 -34 H 3 V -24 H 28 V -20 H 3 V 26 H 16 V 32 H -16 V 26 H -3 V -20 H -28 V -24 H -3 Z",
+      "M -24 -20 L -34 6 H -14 Z M -36 6 C -34 16, -14 16, -12 6 Z",
+      "M 24 -20 L 14 6 H 34 Z M 12 6 C 14 16, 34 16, 36 6 Z",
+    ].join(" "),
+  },
+  gauntlet: {
+    singular: "gauntlet",
+    plural: "gauntlets",
+    path: [
+      "M -14 34 L -18 12 L -24 -4 L -18 -8 L -14 2 L -14 -28 H -8 V -8 H -4 V -34 H 2 V -8 H 6 V -32 H 12 V -8 H 16 V -24 H 22 V 8 L 16 34 Z",
+    ].join(" "),
+  },
+};
+
+export const BRISURE_ORDER: readonly BrisureId[] = [
+  "label",
+  "crescent",
+  "mullet",
+  "martlet",
+  "annulet",
+  "fleur",
+  "rose",
+  "cross-moline",
+  "quatrefoil",
+];
+
+function brisureMeta(id: BrisureId): { path: string; scale: number; name: string } {
+  if (id === "label") {
+    return {
+      path: "M -74 -11 H 74 V -2 H 56 V 16 H 43 V -2 H 7 V 16 H -7 V -2 H -43 V 16 H -56 V -2 H -74 Z",
+      scale: 1,
+      name: "label of three points",
+    };
+  }
+  if (id === "quatrefoil") {
+    return { path: quatrefoilPath(), scale: 0.4, name: "double quatrefoil" };
+  }
+  const c = CHARGE_META[id];
+  return { path: c.path, scale: 0.38, name: c.singular };
+}
+
+// ============================================================================
+// Shape-Aware Division & Ordinary Paths
+// ============================================================================
+
+function divisionPath(division: DivisionId, lineStyle: LineStyle, cy: number): string | null {
+  switch (division) {
+    case "per-pale":
+      return `M 100 -300 H 400 V 540 H 100 ${lineSegment(100, 540, 100, -300, lineStyle)} Z`;
+    case "per-fess":
+      return `M -300 ${cy} ${lineSegment(-300, cy, 400, cy, lineStyle)} V 540 H -300 Z`;
+    case "per-bend":
+      return `M -240 ${cy - 340} ${lineSegment(-240, cy - 340, 440, cy + 340, lineStyle)} L -240 ${cy + 340} Z`;
+    case "per-bend-sinister":
+      return `M 440 ${cy - 340} ${lineSegment(440, cy - 340, -240, cy + 340, lineStyle)} L 440 ${cy + 340} Z`;
+    case "per-chevron":
+      return `M -240 ${cy + 307} L 100 ${cy - 33} L 440 ${cy + 307} V 540 H -240 Z`;
+    case "quarterly":
+      return `M 100 -300 H 400 V ${cy} H 100 Z M -300 ${cy} H 100 V 540 H -300 Z`;
+    case "per-saltire":
+      return `M -240 ${cy - 340} L 100 ${cy} L -240 ${cy + 340} Z M 440 ${cy - 340} L 440 ${cy + 340} L 100 ${cy} Z`;
+    case "gyronny":
+      return [
+        `M 100 ${cy} L 100 -300 L 505 ${cy - 405} Z`,
+        `M 100 ${cy} L 505 ${cy} L 505 ${cy + 405} Z`,
+        `M 100 ${cy} L 100 540 L -305 ${cy + 405} Z`,
+        `M 100 ${cy} L -305 ${cy} L -305 ${cy - 405} Z`,
+      ].join(" ");
+    default:
+      return null;
+  }
+}
+
+function ordinaryPath(ordinary: OrdinaryId, lineStyle: LineStyle, shape: ShapeDef): string | null {
+  const cy = shape.cy;
+  const h = shape.bottomY - shape.topY;
+  const chiefBottom = Math.round(shape.topY + h * 0.24);
+  const halfBand = shape.isWideBanner ? 16 : 21;
+
+  switch (ordinary) {
+    case "chief":
+      return `M -300 -300 H 400 V ${chiefBottom} ${lineSegment(400, chiefBottom, -300, chiefBottom, lineStyle)} Z`;
+    case "fess":
+      return `M -300 ${cy - halfBand} ${lineSegment(-300, cy - halfBand, 400, cy - halfBand, lineStyle)} V ${cy + halfBand} ${lineSegment(400, cy + halfBand, -300, cy + halfBand, lineStyle)} Z`;
+    case "pale":
+      return `M 78 -300 H 122 ${lineSegment(122, -300, 122, 540, lineStyle)} H 78 ${lineSegment(78, 540, 78, -300, lineStyle)} Z`;
+    case "cross":
+      return `M 82 -300 H 118 V ${cy - halfBand + 2} H 400 V ${cy + halfBand - 2} H 118 V 540 H 82 V ${cy + halfBand - 2} H -300 V ${cy - halfBand + 2} H 82 Z`;
+    case "saltire":
+      return `M 100 ${cy - 24} L 440 ${cy - 364} L 464 ${cy - 340} L 124 ${cy} L 464 ${cy + 340} L 440 ${cy + 364} L 100 ${cy + 24} L -240 ${cy + 364} L -264 ${cy + 340} L 76 ${cy} L -264 ${cy - 340} L -240 ${cy - 364} Z`;
+    case "chevron":
+      return `M -240 ${cy + 304} L 100 ${cy - 36} L 440 ${cy + 304} V ${cy + 342} L 100 ${cy + 2} L -240 ${cy + 342} Z`;
+    case "bend":
+      return `M -240 ${cy - 362} ${lineSegment(-240, cy - 362, 440, cy + 318, lineStyle)} L 440 ${cy + 362} ${lineSegment(440, cy + 362, -240, cy - 318, lineStyle)} Z`;
+    case "bend-sinister":
+      return `M 440 ${cy - 362} ${lineSegment(440, cy - 362, -240, cy + 318, lineStyle)} L -240 ${cy + 362} ${lineSegment(-240, cy + 362, 440, cy - 318, lineStyle)} Z`;
+    case "pile":
+      return `M 42 -120 H 158 L 100 ${shape.bottomY - 24} Z`;
+    case "canton":
+      return `M -200 -200 H ${shape.leftX + 76} V ${shape.topY + 64} H -200 Z`;
+    case "flaunches":
+      return `M -200 -200 H ${shape.leftX + 16} C ${shape.leftX + 52} ${cy - 45}, ${shape.leftX + 52} ${cy + 45}, ${shape.leftX + 16} 340 L -200 440 Z M 400 -200 H ${shape.rightX - 16} C ${shape.rightX - 52} ${cy - 45}, ${shape.rightX - 52} ${cy + 45}, ${shape.rightX - 16} 340 L 400 440 Z`;
+    default:
+      return null;
+  }
+}
+
+// ============================================================================
+// Pattern Builders (Furs, Varied Fields, Semé)
+// ============================================================================
+
+const PATTERN_DIVISIONS = new Set<DivisionId>([
+  "paly",
+  "barry",
+  "bendy",
+  "chequy",
+  "lozengy",
+  "seme-fleur",
+  "seme-mullet",
+  "crusilly",
+]);
+
+function buildFillDefs(
+  uid: string,
+  primary: HeraldicFill,
+  secondary: HeraldicFill | undefined,
+  division: DivisionId,
+  shape: ShapeDef
+): { defs: string; fillAttr: (fill: HeraldicFill) => string } {
+  const patterns: string[] = [];
+
+  const registerFur = (fur: FurName, id: string) => {
+    if (fur === "Ermine" || fur === "Ermines" || fur === "Erminois") {
+      const bg = fur === "Ermine" ? "#F8FAFC" : fur === "Ermines" ? "#1E293B" : "#F6C844";
+      const fg = fur === "Ermines" ? "#F8FAFC" : "#1E293B";
+      const spot = (cx: number, cy: number) =>
+        `<g transform="translate(${cx} ${cy})" fill="${fg}">` +
+        `<circle cx="0" cy="-7" r="1.1"/><circle cx="-2.4" cy="-4.8" r="1.1"/><circle cx="2.4" cy="-4.8" r="1.1"/>` +
+        `<path d="M 0 -3.2 L 3 5.5 L 1.2 4.5 L 0 7 L -1.2 4.5 L -3 5.5 Z"/></g>`;
+      patterns.push(
+        `<pattern id="${id}" width="26" height="30" patternUnits="userSpaceOnUse"><rect width="26" height="30" fill="${bg}"/>${spot(6.5, 9)}${spot(19.5, 24)}</pattern>`
+      );
+    } else if (fur === "Vair") {
+      patterns.push(
+        `<pattern id="${id}" width="28" height="28" patternUnits="userSpaceOnUse"><rect width="28" height="28" fill="#F8FAFC"/><path d="M 0 14 L 5 11 L 9 3 Q 14 0, 19 3 L 23 11 L 28 14 Z" fill="#1D4ED8"/><path d="M -14 28 L -9 25 L -5 17 Q 0 14, 5 17 L 9 25 L 14 28 Z M 14 28 L 19 25 L 23 17 Q 28 14, 33 17 L 37 25 L 42 28 Z" fill="#1D4ED8"/></pattern>`
+      );
+    } else if (fur === "Potent") {
+      patterns.push(
+        `<pattern id="${id}" width="28" height="28" patternUnits="userSpaceOnUse"><rect width="28" height="28" fill="#F8FAFC"/><path d="M 4 2 H 24 V 7 H 17 V 14 H 11 V 7 H 4 Z" fill="#1D4ED8"/><path d="M -10 16 H 10 V 21 H 3 V 28 H -3 V 21 H -10 Z M 18 16 H 38 V 21 H 31 V 28 H 25 V 21 H 18 Z" fill="#1D4ED8"/></pattern>`
+      );
+    }
+  };
+
+  const hexOf = (fill: HeraldicFill): string =>
+    fill in ALL_TINCTURES ? ALL_TINCTURES[fill as TinctureName].hex : "#F8FAFC";
+
+  const variedId = `h-varied-${uid}`;
+  if (secondary && PATTERN_DIVISIONS.has(division)) {
+    const c1 = hexOf(primary);
+    const c2 = hexOf(secondary);
+    const w = shape.rightX - shape.leftX;
+    const h = shape.bottomY - shape.topY;
+
+    if (division === "paly") {
+      const pw = w / 3;
+      patterns.push(
+        `<pattern id="${variedId}" x="${shape.leftX}" y="0" width="${f(pw)}" height="20" patternUnits="userSpaceOnUse"><rect width="${f(pw / 2)}" height="20" fill="${c1}"/><rect x="${f(pw / 2)}" width="${f(pw / 2)}" height="20" fill="${c2}"/></pattern>`
+      );
+    } else if (division === "barry") {
+      const ph = h / 3;
+      patterns.push(
+        `<pattern id="${variedId}" x="0" y="${shape.topY}" width="20" height="${f(ph)}" patternUnits="userSpaceOnUse"><rect width="20" height="${f(ph / 2)}" fill="${c1}"/><rect y="${f(ph / 2)}" width="20" height="${f(ph / 2)}" fill="${c2}"/></pattern>`
+      );
+    } else if (division === "bendy") {
+      patterns.push(
+        `<pattern id="${variedId}" width="44" height="44" patternTransform="rotate(-45)" patternUnits="userSpaceOnUse"><rect width="22" height="44" fill="${c1}"/><rect x="22" width="22" height="44" fill="${c2}"/></pattern>`
+      );
+    } else if (division === "chequy") {
+      const s = w / 3;
+      patterns.push(
+        `<pattern id="${variedId}" x="${shape.leftX}" y="${shape.topY}" width="${f(s)}" height="${f(s)}" patternUnits="userSpaceOnUse"><rect width="${f(s)}" height="${f(s)}" fill="${c1}"/><rect x="${f(s / 2)}" y="0" width="${f(s / 2)}" height="${f(s / 2)}" fill="${c2}"/><rect x="0" y="${f(s / 2)}" width="${f(s / 2)}" height="${f(s / 2)}" fill="${c2}"/></pattern>`
+      );
+    } else if (division === "lozengy") {
+      patterns.push(
+        `<pattern id="${variedId}" x="${shape.leftX + 1}" y="${shape.topY}" width="28" height="42" patternUnits="userSpaceOnUse"><rect width="28" height="42" fill="${c1}"/><path d="M 14 0 L 28 21 L 14 42 L 0 21 Z" fill="${c2}"/></pattern>`
+      );
+    } else {
+      const motif =
+        division === "seme-fleur"
+          ? CHARGE_META.fleur.path
+          : division === "seme-mullet"
+            ? CHARGE_META.mullet.path
+            : "M -7 -26 H 7 V -7 H 26 V 7 H 7 V 26 H -7 V 7 H -26 V -7 H -7 Z";
+      patterns.push(
+        `<pattern id="${variedId}" width="38" height="42" patternUnits="userSpaceOnUse">` +
+          `<rect width="38" height="42" fill="${c1}"/>` +
+          `<path d="${motif}" fill="${c2}" transform="translate(9.5 10.5) scale(0.2)"/>` +
+          `<path d="${motif}" fill="${c2}" transform="translate(28.5 31.5) scale(0.2)"/>` +
+          `</pattern>`
+      );
+    }
+  }
+
+  const furMap = new Map<FurName, string>();
+  [primary, secondary].forEach((fill) => {
+    if (fill && fill in FURS && !furMap.has(fill as FurName)) {
+      const id = `h-fur-${fill.toLowerCase()}-${uid}`;
+      furMap.set(fill as FurName, id);
+      registerFur(fill as FurName, id);
+    }
+  });
+
+  const fillAttr = (fill: HeraldicFill): string => {
+    if (fill in ALL_TINCTURES) return ALL_TINCTURES[fill as TinctureName].hex;
+    return `url(#${furMap.get(fill as FurName)})`;
+  };
+
+  return { defs: patterns.join(""), fillAttr };
+}
+
+// ============================================================================
+// Blazon Builder & Parser
+// ============================================================================
+
+const DIV_NAMES: Record<DivisionId, string | null> = {
+  plain: null,
+  "per-pale": "Per pale",
+  "per-fess": "Per fess",
+  "per-bend": "Per bend",
+  "per-bend-sinister": "Per bend sinister",
+  "per-chevron": "Per chevron",
+  quarterly: "Quarterly",
+  "per-saltire": "Per saltire",
+  gyronny: "Gyronny of eight",
+  paly: "Paly of six",
+  barry: "Barry of six",
+  bendy: "Bendy of six",
+  chequy: "Chequy",
+  lozengy: "Lozengy",
+  "seme-fleur": "Semé-de-lis",
+  "seme-mullet": "Semé of mullets",
+  crusilly: "Crusilly",
+};
+
+const ORD_NAMES: Record<OrdinaryId, string | null> = {
+  none: null,
+  chief: "chief",
+  fess: "fess",
+  pale: "pale",
+  cross: "cross",
+  saltire: "saltire",
+  chevron: "chevron",
+  bend: "bend",
+  "bend-sinister": "bend sinister",
+  bordure: "bordure",
+  orle: "orle",
+  pile: "pile",
+  canton: "canton",
+  flaunches: "flaunches",
+};
+
+function buildBlazon(cfg: HeraldryConfig): string {
+  if (cfg.marshalling) {
+    const subBlazons = cfg.marshalling.arms.map((a, i) => `(${i + 1}) ${buildBlazon(a)}`);
+    const base =
+      cfg.marshalling.mode === "impaled"
+        ? `Impaled: ${subBlazons.join("; ")}`
+        : `Quarterly: ${subBlazons.join("; ")}`;
+    return cfg.marshalling.inescutcheon
+      ? `${base}; over all an inescutcheon of (${buildBlazon(cfg.marshalling.inescutcheon)})`
+      : base;
+  }
+
+  const ls = (style: LineStyle) => (style === "plain" ? "" : ` ${style}`);
+  const fieldText =
+    cfg.field.division === "plain"
+      ? cfg.field.primary
+      : `${DIV_NAMES[cfg.field.division]}${ls(cfg.field.lineStyle)} ${cfg.field.primary} and ${cfg.field.secondary}`;
+
+  const parts: string[] = [fieldText];
+
+  if (cfg.ordinary.type !== "none") {
+    const oName = ORD_NAMES[cfg.ordinary.type]!;
+    const oPrefix = cfg.ordinary.type === "flaunches" ? "" : "a ";
+    const oLine = ls(cfg.ordinary.lineStyle);
+    const fimb = cfg.ordinary.fimbriated ? ` fimbriated ${cfg.ordinary.fimbriated}` : "";
+
+    if (
+      cfg.charge &&
+      (cfg.charge.context === "on-chief" ||
+        cfg.charge.context === "on-fess" ||
+        cfg.charge.context === "on-ordinary")
+    ) {
+      const meta = CHARGE_META[cfg.charge.type];
+      const cWord = cfg.charge.count === 3 ? "three" : "a";
+      const cNoun = cfg.charge.count === 3 ? meta.plural : meta.singular;
+      parts.push(
+        `on ${oPrefix}${oName}${oLine} ${cfg.ordinary.tincture}${fimb} ${cWord} ${cNoun} ${cfg.charge.tincture}`
+      );
+    } else {
+      parts.push(`${oPrefix}${oName}${oLine} ${cfg.ordinary.tincture}${fimb}`);
+      if (cfg.charge) {
+        const meta = CHARGE_META[cfg.charge.type];
+        const cWord = cfg.charge.count === 3 ? "three" : "a";
+        const cNoun = cfg.charge.count === 3 ? meta.plural : meta.singular;
+        parts.push(
+          cfg.charge.counterchanged
+            ? `${cWord} ${cNoun} counterchanged`
+            : `${cWord} ${cNoun} ${cfg.charge.tincture}`
+        );
+      }
+    }
+  } else if (cfg.charge) {
+    const meta = CHARGE_META[cfg.charge.type];
+    const cWord = cfg.charge.count === 3 ? "three" : "a";
+    const cNoun = cfg.charge.count === 3 ? meta.plural : meta.singular;
+    parts.push(
+      cfg.charge.counterchanged
+        ? `${cWord} ${cNoun} counterchanged`
+        : `${cWord} ${cNoun} ${cfg.charge.tincture}`
+    );
+  }
+
+  for (const mark of cfg.cadency) {
+    if (mark.method === "brisure" && mark.brisure) {
+      const b = brisureMeta(mark.brisure);
+      parts.push(
+        mark.brisure === "label"
+          ? `overall a ${b.name} ${mark.tincture} for difference`
+          : `in chief a ${b.name} ${mark.tincture} for difference`
+      );
+    } else if (mark.method === "bordure") {
+      parts.push(`all within a bordure ${mark.tincture} for difference`);
+    } else if (mark.method === "bordure-compony") {
+      parts.push(
+        `all within a bordure compony ${mark.tincture} and ${mark.secondaryTincture} for difference`
+      );
+    } else if (mark.method === "bendlet") {
+      parts.push(`overall a bendlet ${mark.tincture} for difference`);
+    } else if (mark.method === "baton-sinister") {
+      parts.push(`overall a baton sinister ${mark.tincture} for difference`);
+    } else if (mark.method === "canton") {
+      parts.push(`a canton ${mark.tincture} for difference`);
+    } else if (mark.method === "invert-tinctures") {
+      parts.push(`tinctures differenced for a cadet branch`);
+    }
+  }
+
+  return parts.join(", ");
+}
+
+export function parseBlazon(blazonText: string, shape: BaseShape = "heater"): HeraldryConfig {
+  const norm = blazonText.trim();
+  const clauses = norm.split(",").map((s) => s.trim()).filter(Boolean);
+
+  const fillNames = [...Object.keys(ALL_TINCTURES), ...FUR_NAMES];
+  const fillRegex = new RegExp(`\\b(${fillNames.join("|")})\\b`, "gi");
+  const tinctureNames = Object.keys(ALL_TINCTURES) as TinctureName[];
+  const tinctureRegex = new RegExp(`\\b(${tinctureNames.join("|")})\\b`, "gi");
+
+  const canonicalFill = (raw: string): HeraldicFill =>
+    fillNames.find((fn) => fn.toLowerCase() === raw.toLowerCase()) as HeraldicFill;
+
+  const lineStyles: LineStyle[] = ["wavy", "indented", "embattled", "engrailed", "invected"];
+  const findLineStyle = (txt: string): LineStyle =>
+    lineStyles.find((ls) => new RegExp(`\\b${ls}\\b`, "i").test(txt)) ?? "plain";
+
+  const fieldClause = clauses[0] ?? "Gules";
+  const fieldFills = (fieldClause.match(fillRegex) ?? []).map(canonicalFill);
+  let division: DivisionId = "plain";
+  const divEntries = Object.entries(DIV_NAMES).filter(([, v]) => v !== null) as Array<
+    [DivisionId, string]
+  >;
+  divEntries.sort((a, b) => b[1].length - a[1].length);
+  for (const [id, label] of divEntries) {
+    if (new RegExp(`\\b${label}\\b`, "i").test(fieldClause)) {
+      division = id;
+      break;
+    }
+  }
+
+  const primary: HeraldicFill = fieldFills[0] ?? "Gules";
+  const secondary: HeraldicFill | undefined =
+    division !== "plain" ? fieldFills[1] ?? (fillType(primary) === "metal" ? "Azure" : "Or") : undefined;
+
+  let ordinary: HeraldryConfig["ordinary"] = { type: "none", lineStyle: "plain" };
+  let charge: HeraldryConfig["charge"] = null;
+  const cadency: CadencyMark[] = [];
+
+  const ordEntries = Object.entries(ORD_NAMES).filter(([, v]) => v !== null) as Array<
+    [OrdinaryId, string]
+  >;
+  ordEntries.sort((a, b) => b[1].length - a[1].length);
+
+  const chargeEntries = Object.entries(CHARGE_META) as Array<[ChargeId, ChargeMeta]>;
+  chargeEntries.sort((a, b) => b[1].singular.length - a[1].singular.length);
+
+  for (const clause of clauses.slice(1)) {
+    if (/for difference/i.test(clause)) {
+      const cTincts = (clause.match(tinctureRegex) ?? []).map(canonicalFill) as TinctureName[];
+      const t = cTincts[0] ?? "Argent";
+      if (/bordure compony/i.test(clause)) {
+        cadency.push({
+          method: "bordure-compony",
+          tincture: t,
+          secondaryTincture: cTincts[1] ?? "Azure",
+          generation: 1,
+          branchSeed: "parsed",
+        });
+      } else if (/bordure/i.test(clause)) {
+        cadency.push({ method: "bordure", tincture: t, generation: 1, branchSeed: "parsed" });
+      } else if (/baton sinister/i.test(clause)) {
+        cadency.push({ method: "baton-sinister", tincture: t, generation: 1, branchSeed: "parsed" });
+      } else if (/bendlet/i.test(clause)) {
+        cadency.push({ method: "bendlet", tincture: t, generation: 1, branchSeed: "parsed" });
+      } else if (/canton/i.test(clause)) {
+        cadency.push({ method: "canton", tincture: t, generation: 1, branchSeed: "parsed" });
+      } else if (/label/i.test(clause)) {
+        cadency.push({
+          method: "brisure",
+          brisure: "label",
+          sonOrder: 1,
+          tincture: t,
+          generation: 1,
+          branchSeed: "parsed",
+        });
+      } else {
+        const bId = BRISURE_ORDER.find((b) =>
+          new RegExp(`\\b${brisureMeta(b).name}\\b`, "i").test(clause)
+        );
+        cadency.push({
+          method: "brisure",
+          brisure: bId ?? "crescent",
+          tincture: t,
+          generation: 1,
+          branchSeed: "parsed",
+        });
+      }
+      continue;
+    }
+
+    const foundOrd = ordEntries.find(([, label]) => new RegExp(`\\b${label}\\b`, "i").test(clause));
+    const foundCharge = chargeEntries.find(([, meta]) =>
+      new RegExp(`\\b(${meta.plural}|${meta.singular})\\b`, "i").test(clause)
+    );
+    const clauseTincts = (clause.match(tinctureRegex) ?? []).map(canonicalFill) as TinctureName[];
+
+    if (foundOrd && /^on\s/i.test(clause) && foundCharge) {
+      const ordId = foundOrd[0];
+      ordinary = {
+        type: ordId,
+        lineStyle: findLineStyle(clause),
+        tincture: clauseTincts[0] ?? "Or",
+      };
+      charge = {
+        type: foundCharge[0],
+        count: /\bthree\b/i.test(clause) ? 3 : 1,
+        context: ordId === "chief" ? "on-chief" : ordId === "fess" ? "on-fess" : "on-ordinary",
+        tincture: clauseTincts[1] ?? "Argent",
+        counterchanged: false,
+      };
+    } else if (foundOrd) {
+      const fimbMatch = clause.match(/fimbriated\s+([a-z]+)/i);
+      ordinary = {
+        type: foundOrd[0],
+        lineStyle: findLineStyle(clause),
+        tincture: clauseTincts[0] ?? "Or",
+        fimbriated: fimbMatch ? (canonicalFill(fimbMatch[1]) as TinctureName) : undefined,
+      };
+    } else if (foundCharge) {
+      const counterchanged = /\bcounterchanged\b/i.test(clause);
+      charge = {
+        type: foundCharge[0],
+        count: /\bthree\b/i.test(clause) ? 3 : 1,
+        context: "field",
+        tincture: counterchanged ? undefined : clauseTincts[0] ?? "Or",
+        counterchanged,
+      };
+    }
+  }
+
+  return {
+    seed: `parsed:${norm}`,
+    shape,
+    field: {
+      division,
+      lineStyle: findLineStyle(fieldClause),
+      primary,
+      secondary,
+    },
+    ordinary,
+    charge,
+    cadency,
+    lineage: { generation: cadency.length },
+  };
+}
+
+// ============================================================================
+// Core Contained Renderer (All Shapes, Zero Text, Zero External Extensions)
+// ============================================================================
+
+function renderContainedContent(
+  config: HeraldryConfig,
+  uid: string,
+  chargeDetails: boolean
+): { defs: string; layers: string } {
+  const shape = SHAPES[config.shape];
+  const cy = shape.cy;
+  const h = shape.bottomY - shape.topY;
+  const chiefBottom = Math.round(shape.topY + h * 0.24);
+
+  // Marshalled Arms (Impaled or Quartered)
+  if (config.marshalling) {
+    const subDefs: string[] = [];
+    const subLayers: string[] = [];
+    const clipPaths: string[] = [];
+
+    if (config.marshalling.mode === "impaled") {
+      const [dexter, sinister] = config.marshalling.arms;
+      const dRes = renderContainedContent({ ...dexter, shape: config.shape }, `${uid}-q0`, chargeDetails);
+      const sRes = renderContainedContent({ ...sinister, shape: config.shape }, `${uid}-q1`, chargeDetails);
+      subDefs.push(dRes.defs, sRes.defs);
+      clipPaths.push(
+        `<clipPath id="h-imp-l-${uid}"><rect x="-50" y="-50" width="150" height="340"/></clipPath>`,
+        `<clipPath id="h-imp-r-${uid}"><rect x="100" y="-50" width="150" height="340"/></clipPath>`
+      );
+      const scale = shape.isWideBanner ? 0.48 : 0.5;
+      subLayers.push(
+        `<g clip-path="url(#h-imp-l-${uid})"><g transform="translate(57.5 ${cy}) scale(${scale}) translate(-100 -${cy})">${dRes.layers}</g></g>`,
+        `<g clip-path="url(#h-imp-r-${uid})"><g transform="translate(142.5 ${cy}) scale(${scale}) translate(-100 -${cy})">${sRes.layers}</g></g>`,
+        `<path d="M 100 0 V 240" stroke="#0f172a" stroke-width="1.4"/>`
+      );
+    } else {
+      const sTop = shape.isWideBanner ? 0.34 : 0.45;
+      const sBot = shape.isWideBanner ? 0.34 : 0.44;
+      const topY = (shape.topY + cy) / 2;
+      const botY = (cy + shape.bottomY) / 2;
+      const boxes = [
+        { x: -50, y: -50, w: 150, h: cy + 50, tx: 57.5, ty: topY, s: sTop },
+        { x: 100, y: -50, w: 150, h: cy + 50, tx: 142.5, ty: topY, s: sTop },
+        { x: -50, y: cy, w: 150, h: 290 - cy, tx: 60, ty: botY, s: sBot },
+        { x: 100, y: cy, w: 150, h: 290 - cy, tx: 140, ty: botY, s: sBot },
+      ];
+      config.marshalling.arms.slice(0, 4).forEach((arm, idx) => {
+        const b = boxes[idx];
+        const qRes = renderContainedContent({ ...arm, shape: config.shape }, `${uid}-q${idx}`, chargeDetails);
+        subDefs.push(qRes.defs);
+        clipPaths.push(
+          `<clipPath id="h-qtr-${idx}-${uid}"><rect x="${b.x}" y="${b.y}" width="${b.w}" height="${b.h}"/></clipPath>`
+        );
+        subLayers.push(
+          `<g clip-path="url(#h-qtr-${idx}-${uid})"><g transform="translate(${b.tx} ${b.ty}) scale(${b.s}) translate(-100 -${cy})">${qRes.layers}</g></g>`
+        );
+      });
+      subLayers.push(`<path d="M 100 0 V 240 M 0 ${cy} H 200" stroke="#0f172a" stroke-width="1.3"/>`);
+    }
+
+    if (config.marshalling.inescutcheon) {
+      const esc = config.marshalling.inescutcheon;
+      const eRes = renderContainedContent({ ...esc, shape: "heater" }, `${uid}-esc`, chargeDetails);
+      subDefs.push(eRes.defs);
+      clipPaths.push(`<clipPath id="h-esc-clip-${uid}"><path d="${SHAPES.heater.path}"/></clipPath>`);
+      const escScale = shape.isWideBanner ? 0.28 : 0.35;
+      subLayers.push(
+        `<g transform="translate(100 ${cy}) scale(${escScale}) translate(-100 -108)">` +
+          `<g clip-path="url(#h-esc-clip-${uid})">${eRes.layers}</g>` +
+          `<path d="${SHAPES.heater.path}" fill="none" stroke="#0f172a" stroke-width="6" stroke-linejoin="round"/>` +
+          `</g>`
+      );
+    }
+
+    return { defs: [...clipPaths, ...subDefs].join(""), layers: subLayers.join("") };
+  }
+
+  const divClipId = `h-div-${uid}`;
+  const variedId = `h-varied-${uid}`;
+
+  const { defs: fillDefs, fillAttr } = buildFillDefs(
+    uid,
+    config.field.primary,
+    config.field.secondary,
+    config.field.division,
+    shape
+  );
+
+  const isPatternDiv = PATTERN_DIVISIONS.has(config.field.division);
+  const divPathStr = isPatternDiv
+    ? null
+    : divisionPath(config.field.division, config.field.lineStyle, cy);
+
+  const fieldLayer = isPatternDiv
+    ? `<rect x="-250" y="-250" width="700" height="740" fill="url(#${variedId})"/>`
+    : `<rect x="-250" y="-250" width="700" height="740" fill="${fillAttr(config.field.primary)}"/>` +
+      (divPathStr && config.field.secondary
+        ? `<path d="${divPathStr}" fill="${fillAttr(config.field.secondary)}"/>`
+        : "");
+
+  let ordinaryLayer = "";
+  if (config.ordinary.type !== "none" && config.ordinary.tincture) {
+    const oHex = ALL_TINCTURES[config.ordinary.tincture].hex;
+    const fimbHex = config.ordinary.fimbriated
+      ? ALL_TINCTURES[config.ordinary.fimbriated].hex
+      : null;
+
+    if (config.ordinary.type === "bordure") {
+      ordinaryLayer = `<path d="${shape.path}" fill="none" stroke="${oHex}" stroke-width="${shape.isWideBanner ? 20 : 26}"/>`;
+    } else if (config.ordinary.type === "orle") {
+      ordinaryLayer = `<path d="${shape.path}" fill="none" stroke="${oHex}" stroke-width="8" transform="translate(100 ${cy}) scale(0.76) translate(-100 -${cy})"/>`;
+    } else {
+      const oPath = ordinaryPath(config.ordinary.type, config.ordinary.lineStyle, shape);
+      if (oPath) {
+        if (fimbHex) {
+          ordinaryLayer = `<path d="${oPath}" fill="${oHex}" stroke="${fimbHex}" stroke-width="4" paint-order="stroke"/>`;
+        } else {
+          const edge = config.field.division !== "plain" ? ` stroke="#0f172a" stroke-width="1.3"` : "";
+          ordinaryLayer = `<path d="${oPath}" fill="${oHex}"${edge}/>`;
+        }
+      }
+    }
+  }
+
+  let chargeLayer = "";
+  if (config.charge) {
+    const cMeta = CHARGE_META[config.charge.type];
+    const cs = shape.chargeScale;
+    let placements: Array<{ x: number; y: number; s: number }> = [];
+
+    if (config.charge.context === "on-chief") {
+      const chiefCy = Math.round((shape.topY + chiefBottom) / 2);
+      const s = shape.isWideBanner ? 0.3 : 0.4;
+      placements =
+        config.charge.count === 3
+          ? [
+              { x: 54, y: chiefCy, s },
+              { x: 100, y: chiefCy, s },
+              { x: 146, y: chiefCy, s },
+            ]
+          : [{ x: 100, y: chiefCy, s: s + 0.03 }];
+    } else if (config.charge.context === "on-fess") {
+      const s = shape.isWideBanner ? 0.34 : 0.4;
+      placements =
+        config.charge.count === 3
+          ? [
+              { x: 54, y: cy, s },
+              { x: 100, y: cy, s },
+              { x: 146, y: cy, s },
+            ]
+          : [{ x: 100, y: cy, s: s + 0.05 }];
+    } else if (config.charge.context === "on-ordinary") {
+      placements = [{ x: 100, y: cy, s: shape.isWideBanner ? 0.42 : 0.5 }];
+    } else if (config.ordinary.type === "chevron") {
+      placements =
+        config.charge.count === 3
+          ? [
+              { x: 60, y: shape.topY + h * 0.23, s: 0.54 * cs },
+              { x: 140, y: shape.topY + h * 0.23, s: 0.54 * cs },
+              { x: 100, y: cy + h * 0.24, s: 0.54 * cs },
+            ]
+          : [{ x: 100, y: cy + h * 0.23, s: 0.76 * cs }];
+    } else if (config.ordinary.type === "chief") {
+      const belowChiefCy = Math.round((chiefBottom + shape.bottomY) / 2) - 3;
+      placements = [{ x: 100, y: belowChiefCy, s: 1.0 * cs }];
+    } else if (config.ordinary.type === "bordure" || config.ordinary.type === "orle") {
+      placements = [{ x: 100, y: cy, s: 1.0 * cs }];
+    } else if (config.charge.count === 3) {
+      if (shape.isWideBanner) {
+        placements = [
+          { x: 50, y: cy, s: 0.65 * cs },
+          { x: 100, y: cy, s: 0.65 * cs },
+          { x: 150, y: cy, s: 0.65 * cs },
+        ];
+      } else {
+        placements = [
+          { x: 64, y: shape.topY + h * 0.29, s: 0.7 * cs },
+          { x: 136, y: shape.topY + h * 0.29, s: 0.7 * cs },
+          { x: 100, y: shape.topY + h * 0.68, s: 0.7 * cs },
+        ];
+      }
+    } else {
+      placements = [{ x: 100, y: cy, s: 1.26 * cs }];
+    }
+
+    const detailHex =
+      config.charge.tincture === "Gules"
+        ? "#1D4ED8"
+        : config.charge.type === "rose"
+          ? "#F6C844"
+          : "#C82829";
+
+    const renderPaths = (fill: string, addStroke = false, withDetails = false) =>
+      placements
+        .map(({ x, y, s }) => {
+          const base = `<path d="${cMeta.path}" fill="${fill}" fill-rule="evenodd"${
+            addStroke ? ` stroke="#0f172a" stroke-width="1.3"` : ""
+          } transform="translate(${x} ${y}) scale(${f(s)})"/>`;
+          const det =
+            withDetails && chargeDetails && cMeta.detailPath
+              ? `<path d="${cMeta.detailPath}" fill="${detailHex}" transform="translate(${x} ${y}) scale(${f(s)})"/>`
+              : "";
+          return base + det;
+        })
+        .join("");
+
+    if (config.charge.counterchanged && divPathStr && config.field.secondary) {
+      chargeLayer =
+        `<g>${renderPaths(fillAttr(config.field.secondary))}</g>` +
+        `<g clip-path="url(#${divClipId})">${renderPaths(fillAttr(config.field.primary))}</g>`;
+    } else if (config.charge.tincture) {
+      const needsEdge =
+        (config.field.division !== "plain" || config.field.primary in FURS) &&
+        config.charge.context === "field";
+      chargeLayer = `<g>${renderPaths(ALL_TINCTURES[config.charge.tincture].hex, needsEdge, true)}</g>`;
+    }
+  }
+
+  const cadencyLayer = config.cadency
+    .map((mark, idx) => {
+      const cHex = ALL_TINCTURES[mark.tincture].hex;
+      if (mark.method === "brisure" && mark.brisure) {
+        const b = brisureMeta(mark.brisure);
+        let bx = 100;
+        let by = mark.brisure === "label" ? shape.topY + 18 : shape.topY + 26;
+
+        if (mark.brisure !== "label") {
+          const chiefOccupied =
+            (config.ordinary.type === "chief" && config.charge?.context === "on-chief") ||
+            config.ordinary.type === "canton";
+          if (chiefOccupied) {
+            bx = config.ordinary.type === "canton" ? 142 : 100;
+            by = config.ordinary.type === "canton" ? shape.topY + 26 : chiefBottom + 16;
+          } else if (idx > 0) {
+            bx = idx % 2 === 1 ? 58 : 142;
+            by = shape.topY + 26;
+          }
+        }
+        return `<path d="${b.path}" fill="${cHex}" fill-rule="evenodd" stroke="#0f172a" stroke-width="1.3" transform="translate(${bx} ${by}) scale(${b.scale})"/>`;
+      }
+      if (mark.method === "bordure") {
+        return `<path d="${shape.path}" fill="none" stroke="${cHex}" stroke-width="${shape.isWideBanner ? 18 : 24}"/>`;
+      }
+      if (mark.method === "bordure-compony" && mark.secondaryTincture) {
+        const sHex = ALL_TINCTURES[mark.secondaryTincture].hex;
+        const bw = shape.isWideBanner ? 18 : 24;
+        return (
+          `<path d="${shape.path}" fill="none" stroke="${cHex}" stroke-width="${bw}"/>` +
+          `<path d="${shape.path}" fill="none" stroke="${sHex}" stroke-width="${bw}" stroke-dasharray="22 22"/>`
+        );
+      }
+      if (mark.method === "bendlet") {
+        return `<path d="M -40 ${cy - 150} L -40 ${cy - 130} L 240 ${cy + 150} L 240 ${cy + 130} Z" fill="${cHex}" stroke="#0f172a" stroke-width="1.2"/>`;
+      }
+      if (mark.method === "baton-sinister") {
+        return `<path d="M 159.5 ${cy - 64} L 168.5 ${cy - 55} L 40.5 ${cy + 73} L 31.5 ${cy + 64} Z" fill="${cHex}" stroke="#0f172a" stroke-width="1.3"/>`;
+      }
+      if (mark.method === "canton") {
+        return `<rect x="-40" y="-40" width="${shape.leftX + 108}" height="${shape.topY + 100}" fill="${cHex}" stroke="#0f172a" stroke-width="1.5"/>`;
+      }
+      return "";
+    })
+    .join("");
+
+  const defs = [
+    divPathStr ? `<clipPath id="${divClipId}"><path d="${divPathStr}"/></clipPath>` : "",
+    fillDefs,
+  ]
+    .filter(Boolean)
+    .join("");
+
+  return { defs, layers: `${fieldLayer}${ordinaryLayer}${chargeLayer}${cadencyLayer}` };
+}
+
+export function renderHeraldry(
+  config: HeraldryConfig,
+  options: RenderOptions = {}
+): HeraldryResult {
+  const sheen = options.sheen ?? true;
+  const outline = options.outline ?? true;
+  const chargeDetails = options.chargeDetails ?? true;
+  const w = options.width ?? 200;
+  const h = options.height ?? 240;
+
+  const fullHash = hashSeed(`${JSON.stringify(config)}::${options.instanceId ?? ""}`);
+  const uid = fullHash.toString(36);
+  const shape = SHAPES[config.shape];
+  const blazon = buildBlazon(config);
+
+  const clipId = `h-clip-${uid}`;
+  const sheenId = `h-sheen-${uid}`;
+
+  const { defs: contentDefs, layers } = renderContainedContent(config, uid, chargeDetails);
+
+  const shapeDefs = [
+    `<clipPath id="${clipId}"><path d="${shape.path}"/></clipPath>`,
+    contentDefs,
+    sheen
+      ? `<linearGradient id="${sheenId}" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stop-color="#fff" stop-opacity="0.14"/><stop offset="50%" stop-color="#fff" stop-opacity="0"/><stop offset="100%" stop-color="#000" stop-opacity="0.15"/></linearGradient>`
+      : "",
+  ]
+    .filter(Boolean)
+    .join("");
+
+  const inner = [
+    `<g clip-path="url(#${clipId})">`,
+    layers,
+    sheen ? `<rect x="0" y="0" width="200" height="240" fill="url(#${sheenId})" pointer-events="none"/>` : "",
+    `</g>`,
+    outline ? `<path d="${shape.path}" fill="none" stroke="#0f172a" stroke-width="4" stroke-linejoin="round"/>` : "",
+  ]
+    .filter(Boolean)
+    .join("");
+
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 240" width="${w}" height="${h}" role="img" aria-label="${escapeXml(blazon)}"><defs>${shapeDefs}</defs>${inner}</svg>`;
+  return { svg, blazon, config };
+}
+
+function escapeXml(str: string): string {
+  return str.replace(/[<>&"']/g, (ch) =>
+    ch === "<" ? "&lt;" : ch === ">" ? "&gt;" : ch === "&" ? "&amp;" : ch === '"' ? "&quot;" : "&apos;"
+  );
+}
+
+export function toDataUrl(svg: string): string {
+  return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
+}
+
+// ============================================================================
+// Main Generator (Includes Shields, Circles, Squares, Rectangles, Banners)
+// ============================================================================
+
+const SIMPLE_PARTITIONS: readonly DivisionId[] = [
+  "per-pale",
+  "per-fess",
+  "per-bend",
+  "per-bend-sinister",
+  "per-chevron",
+  "quarterly",
+  "per-saltire",
+];
+
+const COMPLEX_PARTITIONS: readonly DivisionId[] = [
+  "gyronny",
+  "paly",
+  "barry",
+  "bendy",
+  "chequy",
+  "lozengy",
+  "seme-fleur",
+  "seme-mullet",
+  "crusilly",
+];
+
+const LINE_STYLES: readonly LineStyle[] = ["wavy", "indented", "embattled", "engrailed", "invected"];
+
+const CLASSIC_ORDINARIES: readonly OrdinaryId[] = [
+  "chief",
+  "fess",
+  "pale",
+  "cross",
+  "saltire",
+  "chevron",
+  "bend",
+  "bend-sinister",
+  "bordure",
+  "orle",
+  "pile",
+  "canton",
+  "flaunches",
+];
+
+const CHARGE_KEYS = Object.keys(CHARGE_META) as ChargeId[];
+const SHAPE_KEYS = Object.keys(SHAPES) as BaseShape[];
+
+export function generateHeraldry(
+  seed?: string | number,
+  options: HeraldryOptions = {}
+): HeraldryResult {
+  const resolvedSeed = seed !== undefined ? String(seed) : randomSeedString();
+  const rng = createRng(hashSeed(resolvedSeed));
+
+  const shapeKey: BaseShape = options.shape ?? options.shield ?? pick(rng, SHAPE_KEYS);
+  const shape = SHAPES[shapeKey];
+
+  const isSimple = Boolean(options.simple);
+  const allowFurs = isSimple ? false : (options.allowFurs ?? true);
+  const allowComplex = isSimple ? false : (options.allowComplexFields ?? true);
+
+  let division: DivisionId;
+  if (options.division) {
+    division = options.division;
+  } else if (isSimple) {
+    const r = rng();
+    if (r < 0.78) division = "plain";
+    else division = pick(rng, ["per-pale", "per-fess", "quarterly"] as const);
+  } else {
+    const r = rng();
+    if (r < 0.65) division = "plain";
+    else if (r < 0.9 || !allowComplex) division = pick(rng, SIMPLE_PARTITIONS);
+    else division = pick(rng, COMPLEX_PARTITIONS);
+  }
+
+  const lineStyle: LineStyle =
+    options.lineStyle ?? (isSimple ? "plain" : rng() < 0.88 ? "plain" : pick(rng, LINE_STYLES));
+
+  const useFur = allowFurs && !PATTERN_DIVISIONS.has(division) && rng() < 0.06;
+  const primary: HeraldicFill = useFur
+    ? pick(rng, FUR_NAMES)
+    : pick(rng, rng() < 0.5 ? METALS : COLOURS).name;
+
+  const secondary: HeraldicFill | undefined =
+    division !== "plain" ? pick(rng, contrastPool(fillType(primary))).name : undefined;
+
+  let ordinaryType: OrdinaryId = "none";
+  if (options.ordinary !== undefined) {
+    ordinaryType = options.ordinary;
+  } else if (isSimple) {
+    if (division === "plain" && rng() < 0.30) {
+      ordinaryType = pick(rng, ["fess", "chief", "cross", "chevron", "saltire", "pale"] as const);
+    }
+  } else if (division === "plain" && rng() < 0.45) {
+    ordinaryType = pick(rng, CLASSIC_ORDINARIES);
+  } else if (division !== "plain" && !PATTERN_DIVISIONS.has(division) && rng() < 0.12) {
+    ordinaryType = pick(rng, ["chief", "bordure"] as const);
+  }
+
+  const ordinaryLine: LineStyle =
+    options.lineStyle ??
+    (!isSimple && ["chief", "fess", "pale", "bend", "bend-sinister"].includes(ordinaryType) && rng() < 0.14
+      ? pick(rng, LINE_STYLES)
+      : "plain");
+
+  const ordinaryTincture: TinctureName | undefined =
+    ordinaryType !== "none" ? pick(rng, contrastPool(fillType(primary))).name : undefined;
+
+  let chargeConfig: HeraldryConfig["charge"] = null;
+  const wantCharge =
+    options.charge !== undefined
+      ? options.charge !== null
+      : isSimple
+        ? ordinaryType === "none"
+          ? division === "plain"
+            ? rng() < 0.92
+            : rng() < 0.45
+          : rng() < 0.35
+        : division === "plain" && ordinaryType === "none"
+          ? rng() < 0.94
+          : ordinaryType !== "none"
+            ? rng() < 0.45
+            : rng() < 0.6;
+
+  if (wantCharge) {
+    const ROYAL_SIMPLE_CHARGES: readonly ChargeId[] = [
+      "lion",
+      "eagle",
+      "griffin",
+      "dragon",
+      "phoenix",
+      "stag",
+      "crown",
+      "fleur",
+      "sun",
+      "rose",
+      "cross-pattee",
+      "tower",
+      "sword",
+      "crossed-swords",
+      "anchor",
+      "oak-tree",
+      "portcullis",
+      "chalice",
+    ];
+    const cType: ChargeId = options.charge ?? pick(rng, isSimple ? ROYAL_SIMPLE_CHARGES : CHARGE_KEYS);
+    const pType = fillType(primary);
+
+    if (division === "plain" && ordinaryType === "none") {
+      const count: 1 | 3 = !isSimple && shape.wideChief && rng() < 0.16 ? 3 : 1;
+      chargeConfig = {
+        type: cType,
+        count,
+        context: "field",
+        tincture: pick(rng, contrastPool(pType)).name,
+        counterchanged: false,
+      };
+    } else if (division !== "plain" && ordinaryType === "none") {
+      const canCounterchange = !PATTERN_DIVISIONS.has(division) && rng() < 0.7;
+      chargeConfig = {
+        type: cType,
+        count: 1,
+        context: "field",
+        tincture: canCounterchange ? undefined : pick(rng, contrastPool(pType)).name,
+        counterchanged: canCounterchange,
+      };
+    } else if (ordinaryType === "chief" && ordinaryTincture) {
+      if (shape.wideChief && rng() < 0.3) {
+        chargeConfig = {
+          type: cType,
+          count: 3,
+          context: "on-chief",
+          tincture: pick(rng, contrastPool(ALL_TINCTURES[ordinaryTincture].type)).name,
+          counterchanged: false,
+        };
+      } else {
+        chargeConfig = {
+          type: cType,
+          count: 1,
+          context: "field",
+          tincture: ordinaryTincture,
+          counterchanged: false,
+        };
+      }
+    } else if (ordinaryType === "fess" && ordinaryTincture) {
+      chargeConfig = {
+        type: cType,
+        count: shape.wideChief && rng() < 0.25 ? 3 : 1,
+        context: "on-fess",
+        tincture: pick(rng, contrastPool(ALL_TINCTURES[ordinaryTincture].type)).name,
+        counterchanged: false,
+      };
+    } else if (ordinaryType === "chevron" && ordinaryTincture) {
+      chargeConfig = {
+        type: cType,
+        count: 1,
+        context: "field",
+        tincture: ordinaryTincture,
+        counterchanged: false,
+      };
+    } else if ((ordinaryType === "bordure" || ordinaryType === "orle") && ordinaryTincture) {
+      chargeConfig = {
+        type: cType,
+        count: 1,
+        context: "field",
+        tincture: division === "plain" ? ordinaryTincture : pick(rng, contrastPool(pType)).name,
+        counterchanged: false,
+      };
+    } else if (ordinaryTincture) {
+      chargeConfig = {
+        type: cType,
+        count: 1,
+        context: "on-ordinary",
+        tincture: pick(rng, contrastPool(ALL_TINCTURES[ordinaryTincture].type)).name,
+        counterchanged: false,
+      };
+    }
+  }
+
+  const config: HeraldryConfig = {
+    seed: resolvedSeed,
+    shape: shapeKey,
+    field: {
+      division,
+      lineStyle: ["per-pale", "per-fess", "per-bend", "per-bend-sinister"].includes(division)
+        ? lineStyle
+        : "plain",
+      primary,
+      secondary,
+    },
+    ordinary: {
+      type: ordinaryType,
+      lineStyle: ordinaryLine,
+      tincture: ordinaryTincture,
+    },
+    charge: chargeConfig,
+    cadency: [],
+    lineage: { generation: 0 },
+  };
+
+  return renderHeraldry(config, options);
+}
+
+export function randomHeraldry(options: HeraldryOptions = {}): HeraldryResult {
+  return generateHeraldry(undefined, options);
+}
+
+// ============================================================================
+// Cadet Branches & Marshalling
+// ============================================================================
+
+export function createCadetBranch(
+  parent: HeraldryResult | HeraldryConfig | string | number,
+  options: CadetBranchOptions = {}
+): HeraldryResult {
+  const parentConfig: HeraldryConfig =
+    typeof parent === "string" || typeof parent === "number"
+      ? generateHeraldry(parent).config
+      : "config" in parent
+        ? parent.config
+        : parent;
+
+  const branchSeed =
+    options.branchSeed !== undefined ? String(options.branchSeed) : randomSeedString();
+  const rng = createRng(hashSeed(`${parentConfig.seed}::cadet::${branchSeed}`));
+
+  const nextConfig: HeraldryConfig = JSON.parse(JSON.stringify(parentConfig));
+  const generation = parentConfig.lineage.generation + 1;
+  nextConfig.seed = `${parentConfig.seed}/${branchSeed}`;
+  nextConfig.lineage = { parentSeed: parentConfig.seed, generation };
+
+  let method: Exclude<CadencyMethod, "auto">;
+  if (options.sonOrder) {
+    method = "brisure";
+  } else if (options.method && options.method !== "auto") {
+    method = options.method;
+  } else if (options.subtle) {
+    // Cadet branches strictly receive a slight cadency modification (brisure or bordure) over parent banner
+    const subtlePool: Exclude<CadencyMethod, "auto">[] =
+      nextConfig.ordinary.type === "bordure"
+        ? ["brisure"]
+        : ["brisure", "brisure", "brisure", "bordure"];
+    method = pick(rng, subtlePool);
+  } else {
+    const pool: Exclude<CadencyMethod, "auto">[] = [
+      "brisure",
+      "brisure",
+      "bordure",
+      "bordure-compony",
+      "bendlet",
+      "canton",
+      "invert-tinctures",
+    ];
+    const filtered =
+      nextConfig.ordinary.type === "bordure"
+        ? pool.filter((m) => m !== "bordure" && m !== "bordure-compony")
+        : pool;
+    method = pick(rng, filtered);
+  }
+
+  const pType = fillType(nextConfig.field.primary);
+  const markTincture: TinctureName =
+    options.tincture ?? pick(rng, contrastPool(pType)).name;
+
+  if (method === "invert-tinctures") {
+    if (nextConfig.field.secondary && nextConfig.field.secondary in ALL_TINCTURES) {
+      const oldP = nextConfig.field.primary;
+      nextConfig.field.primary = nextConfig.field.secondary;
+      nextConfig.field.secondary = oldP;
+    } else if (nextConfig.ordinary.tincture && nextConfig.field.primary in ALL_TINCTURES) {
+      const oldP = nextConfig.field.primary as TinctureName;
+      nextConfig.field.primary = nextConfig.ordinary.tincture;
+      nextConfig.ordinary.tincture = oldP;
+    } else if (nextConfig.charge?.tincture && nextConfig.field.primary in ALL_TINCTURES) {
+      const oldP = nextConfig.field.primary as TinctureName;
+      nextConfig.field.primary = nextConfig.charge.tincture;
+      nextConfig.charge.tincture = oldP;
+    }
+    nextConfig.cadency.push({ method: "invert-tinctures", tincture: markTincture, generation, branchSeed });
+  } else if (method === "brisure") {
+    const sonOrder =
+      options.sonOrder ?? ((Math.floor(rng() * 9) + 1) as CadetBranchOptions["sonOrder"])!;
+    nextConfig.cadency.push({
+      method: "brisure",
+      brisure: BRISURE_ORDER[sonOrder - 1],
+      sonOrder,
+      tincture: markTincture,
+      generation,
+      branchSeed,
+    });
+  } else if (method === "bordure-compony") {
+    const secondaryTincture = pick(rng, contrastPool(ALL_TINCTURES[markTincture].type)).name;
+    nextConfig.cadency.push({
+      method: "bordure-compony",
+      tincture: markTincture,
+      secondaryTincture,
+      generation,
+      branchSeed,
+    });
+  } else {
+    nextConfig.cadency.push({ method, tincture: markTincture, generation, branchSeed });
+  }
+
+  return renderHeraldry(nextConfig, options);
+}
+
+const toConfig = (input: HeraldryResult | HeraldryConfig | string | number): HeraldryConfig =>
+  typeof input === "string" || typeof input === "number"
+    ? generateHeraldry(input).config
+    : "config" in input
+      ? input.config
+      : input;
+
+export function impaleArms(
+  dexter: HeraldryResult | HeraldryConfig | string | number,
+  sinister: HeraldryResult | HeraldryConfig | string | number,
+  options: RenderOptions & { shape?: BaseShape; shield?: BaseShape } = {}
+): HeraldryResult {
+  const c1 = toConfig(dexter);
+  const c2 = toConfig(sinister);
+  const config: HeraldryConfig = {
+    seed: `impaled(${c1.seed},${c2.seed})`,
+    shape: options.shape ?? options.shield ?? c1.shape,
+    field: { division: "plain", lineStyle: "plain", primary: c1.field.primary },
+    ordinary: { type: "none", lineStyle: "plain" },
+    charge: null,
+    cadency: [],
+    lineage: { generation: 0 },
+    marshalling: { mode: "impaled", arms: [c1, c2] },
+  };
+  return renderHeraldry(config, options);
+}
+
+export function quarterArms(
+  houses: Array<HeraldryResult | HeraldryConfig | string | number>,
+  options: RenderOptions & {
+    shape?: BaseShape;
+    shield?: BaseShape;
+    inescutcheon?: HeraldryResult | HeraldryConfig | string | number;
+  } = {}
+): HeraldryResult {
+  const resolved = houses.map(toConfig);
+  const quarters =
+    resolved.length === 2
+      ? [resolved[0], resolved[1], resolved[1], resolved[0]]
+      : resolved.length === 3
+        ? [resolved[0], resolved[1], resolved[2], resolved[0]]
+        : resolved.slice(0, 4);
+
+  const config: HeraldryConfig = {
+    seed: `quartered(${quarters.map((q) => q.seed).join(",")})`,
+    shape: options.shape ?? options.shield ?? quarters[0].shape,
+    field: { division: "plain", lineStyle: "plain", primary: quarters[0].field.primary },
+    ordinary: { type: "none", lineStyle: "plain" },
+    charge: null,
+    cadency: [],
+    lineage: { generation: 0 },
+    marshalling: {
+      mode: "quartered",
+      arms: quarters,
+      inescutcheon: options.inescutcheon ? toConfig(options.inescutcheon) : undefined,
+    },
+  };
+  return renderHeraldry(config, options);
+}

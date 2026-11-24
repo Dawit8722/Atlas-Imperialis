@@ -1,0 +1,245 @@
+--- START OF FILE src/components/TopBar.tsx ---
+import React, { useState } from 'react';
+import { WorldSettings, WorldTemplate } from '../types/world';
+import { Compass, BookOpen, Clock, Settings2, Feather, RefreshCw, Wind, CloudRain } from 'lucide-react';
+
+interface TopBarProps {
+  currentView: 'map' | 'sagas' | 'chronicles' | 'compendium';
+  onChangeView: (view: 'map' | 'sagas' | 'chronicles' | 'compendium') => void;
+  onOpenCompendium: () => void;
+  settings: WorldSettings;
+  onUpdateSettings: (newSettings: WorldSettings) => void;
+  onRegenerate: () => void;
+  isGenerating?: boolean;
+}
+
+export const TopBar: React.FC<TopBarProps> = ({
+  currentView,
+  onChangeView,
+  onOpenCompendium,
+  settings,
+  onUpdateSettings,
+  onRegenerate,
+  isGenerating,
+}) => {
+  const [showConfig, useStateConfig] = useState(false);
+
+  const templates: WorldTemplate[] = [
+    'Continents',
+    'Archipelago',
+    'Pangaea',
+    'Inland Sea',
+    'Shattered Realm',
+  ];
+
+  return (
+    <header className="flex items-center justify-between gap-6 px-6 py-2.5 bg-stone-900/70 backdrop-blur-md border border-white/10 rounded-full shadow-2xl shrink-0 select-none">
+      <div className="flex items-center gap-2.5 whitespace-nowrap shrink-0">
+        <span className="text-xl">🗺️</span>
+        <span className="font-cinzel text-lg font-bold tracking-tight text-amber-100 whitespace-nowrap shrink-0">
+          RealmSmith
+        </span>
+      </div>
+
+      <nav className="hidden md:flex items-center gap-6 text-sm font-medium text-stone-400">
+        <button
+          onClick={() => onChangeView('map')}
+          className={`flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+            currentView === 'map'
+              ? 'text-amber-400 font-semibold border-b-2 border-amber-500 pb-0.5'
+              : 'hover:text-stone-200'
+          }`}
+        >
+          <Compass className="w-4 h-4" />
+          <span>Fantasy Map</span>
+        </button>
+
+        <button
+          onClick={() => onChangeView('sagas')}
+          className={`flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+            currentView === 'sagas'
+              ? 'text-amber-400 font-semibold border-b-2 border-amber-500 pb-0.5'
+              : 'hover:text-stone-200'
+          }`}
+        >
+          <Feather className="w-4 h-4" />
+          <span>Story Generator</span>
+        </button>
+
+        <button
+          onClick={() => onChangeView('chronicles')}
+          className={`flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+            currentView === 'chronicles'
+              ? 'text-amber-400 font-semibold border-b-2 border-amber-500 pb-0.5'
+              : 'hover:text-stone-200'
+          }`}
+        >
+          <Clock className="w-4 h-4" />
+          <span>Historical Annals</span>
+        </button>
+
+        <button
+          onClick={onOpenCompendium}
+          className="flex items-center gap-1.5 hover:text-amber-300 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+        >
+          <BookOpen className="w-4 h-4" />
+          <span>Compendium of the Realm</span>
+        </button>
+      </nav>
+
+      <div className="flex items-center gap-3 shrink-0">
+        <div className="relative">
+          <button
+            onClick={() => useStateConfig(!showConfig)}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-stone-300 hover:text-white bg-stone-900 border border-stone-800 rounded-lg hover:bg-stone-800 transition-colors whitespace-nowrap shrink-0"
+          >
+            <Settings2 className="w-3.5 h-3.5" />
+            <span>World Settings</span>
+          </button>
+
+          {showConfig && (
+            <div className="absolute right-0 mt-2 w-80 p-4 bg-stone-900 border border-stone-800 rounded-xl shadow-2xl z-40 text-xs space-y-3.5">
+              <div className="font-semibold text-stone-100 border-b border-stone-800 pb-2 flex items-center justify-between">
+                <span>Procedural World Generator</span>
+                <span className="text-[10px] text-amber-400">Azgaar + Mapgen4</span>
+              </div>
+
+              <div>
+                <label className="block text-stone-400 mb-1">Landmass Template</label>
+                <select
+                  value={settings.template}
+                  onChange={(e) =>
+                    onUpdateSettings({ ...settings, template: e.target.value as WorldTemplate })
+                  }
+                  className="w-full px-2.5 py-1.5 bg-stone-950 border border-stone-800 rounded text-stone-200 focus:outline-none focus:border-amber-500"
+                >
+                  {templates.map((t) => (
+                    <option key={t} value={t}>
+                      {t}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <div className="flex justify-between text-stone-400 mb-1">
+                  <span className="flex items-center gap-1">
+                    <Wind className="w-3 h-3 text-amber-400" />
+                    <span>Wind Direction</span>
+                  </span>
+                  <span className="font-mono text-stone-200">{settings.mapgen4.windAngleDeg}°</span>
+                </div>
+                <input
+                  type="range"
+                  min={0}
+                  max={360}
+                  step={15}
+                  value={settings.mapgen4.windAngleDeg}
+                  onChange={(e) =>
+                    onUpdateSettings({
+                      ...settings,
+                      mapgen4: { ...settings.mapgen4, windAngleDeg: parseInt(e.target.value) },
+                    })
+                  }
+                  className="w-full accent-amber-500 cursor-pointer"
+                />
+              </div>
+
+              <div>
+                <div className="flex justify-between text-stone-400 mb-1">
+                  <span className="flex items-center gap-1">
+                    <CloudRain className="w-3 h-3 text-sky-400" />
+                    <span>Orographic Raininess</span>
+                  </span>
+                  <span className="font-mono text-stone-200">
+                    {settings.mapgen4.raininess.toFixed(1)}x
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  min={0.4}
+                  max={2.5}
+                  step={0.1}
+                  value={settings.mapgen4.raininess}
+                  onChange={(e) =>
+                    onUpdateSettings({
+                      ...settings,
+                      mapgen4: { ...settings.mapgen4, raininess: parseFloat(e.target.value) },
+                    })
+                  }
+                  className="w-full accent-amber-500 cursor-pointer"
+                />
+              </div>
+
+              <div>
+                <div className="flex justify-between text-stone-400 mb-1">
+                  <span>Sea Level Threshold</span>
+                  <span className="font-mono text-stone-200">
+                    {Math.round(settings.mapgen4.seaLevel * 100)}%
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  min={0.18}
+                  max={0.45}
+                  step={0.02}
+                  value={settings.mapgen4.seaLevel}
+                  onChange={(e) =>
+                    onUpdateSettings({
+                      ...settings,
+                      seaLevel: parseFloat(e.target.value),
+                      mapgen4: { ...settings.mapgen4, seaLevel: parseFloat(e.target.value) },
+                    })
+                  }
+                  className="w-full accent-amber-500 cursor-pointer"
+                />
+              </div>
+
+              <div>
+                <label className="block text-stone-400 mb-1">World Seed</label>
+                <input
+                  type="text"
+                  value={settings.seed}
+                  onChange={(e) => onUpdateSettings({ ...settings, seed: e.target.value })}
+                  className="w-full px-2.5 py-1.5 bg-stone-950 border border-stone-800 rounded font-mono text-stone-200 focus:outline-none focus:border-amber-500"
+                  placeholder="e.g. Eldoria-1042"
+                />
+              </div>
+
+              <div className="pt-2 flex justify-end">
+                <button
+                  onClick={() => {
+                    useStateConfig(false);
+                    onRegenerate();
+                  }}
+                  className="w-full py-2 bg-amber-600 hover:bg-amber-500 text-white font-medium rounded-lg transition-colors text-center"
+                >
+                  Apply & Rebuild DualMesh
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+
+        <button
+          onClick={onRegenerate}
+          disabled={isGenerating}
+          title="Regenerate with Random Seed"
+          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-stone-300 hover:text-white bg-stone-900 border border-stone-800 rounded-lg hover:bg-stone-800 transition-colors whitespace-nowrap shrink-0"
+        >
+          <RefreshCw className={`w-3.5 h-3.5 ${isGenerating ? 'animate-spin' : ''}`} />
+          <span className="hidden sm:inline">New Seed</span>
+        </button>
+
+        <button
+          onClick={onOpenCompendium}
+          className="flex items-center gap-2 px-4 py-2 text-xs font-medium text-white bg-amber-600 hover:bg-amber-500 rounded-lg shadow transition-colors whitespace-nowrap shrink-0"
+        >
+          <BookOpen className="w-3.5 h-3.5" />
+          <span>Export Lore Book</span>
+        </button>
+      </div>
+    </header>
+  );
+};
+--- END OF FILE src/components/TopBar.tsx ---
